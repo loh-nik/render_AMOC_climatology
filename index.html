@@ -94,36 +94,82 @@
   // Build the heatmap as an equirectangular texture from the grid
   // ---------------------------------------------------------------
   function buildHeatmapDataUrl(heatmap) {
-    const { nlat, nlon, values } = heatmap;
+    // Payload format: { values: [[...], [...], ...] }
+    // Any rectangular 2-D array is supported; dimensions are inferred.
+    const values = heatmap.values;
+    if (!Array.isArray(values) || values.length === 0 ||
+        !Array.isArray(values[0]) || values[0].length === 0) {
+      throw new Error('DATA.heatmap.values must be a non-empty 2-D array');
+    }
+
+    const nlat = values.length;
+    const nlon = values[0].length;
+    for (let i = 0; i < nlat; i++) {
+      if (!Array.isArray(values[i]) || values[i].length !== nlon) {
+        throw new Error('DATA.heatmap.values must be rectangular');
+      }
+    }
+
     const canvas = document.createElement('canvas');
-    canvas.width = nlon; canvas.height = nlat;
+    canvas.width = nlon;
+    canvas.height = nlat;
     const ctx = canvas.getContext('2d');
     const img = ctx.createImageData(nlon, nlat);
 
+    // The array covers the complete globe with uniform spacing:
+    // columns = longitude -180 .. +180
+    // rows    = latitude  +90  .. -90
+    // Therefore row 0 is the northern edge and row nlat-1 is the southern edge.
     let min = Infinity, max = -Infinity;
-    for (let i = 0; i < nlat; i++) for (let j = 0; j < nlon; j++) {
-      const v = values[i][j];
-      if (v < min) min = v;
-      if (v > max) max = v;
+    for (let i = 0; i < nlat; i++) {
+      for (let j = 0; j < nlon; j++) {
+        const v = Number(values[i][j]);
+        if (Number.isFinite(v)) {
+          min = Math.min(min, v);
+          max = Math.max(max, v);
+        }
+      }
     }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      throw new Error('DATA.heatmap.values contains no finite numbers');
+    }
+
     const mid = (min + max) / 2;
     const half = Math.max(max - mid, mid - min) || 1;
 
-    // simple blue -> white -> red diverging colormap
     function lerp(a, b, k) { return a + (b - a) * k; }
     function colorFor(v) {
-      const t = Math.max(-1, Math.min(1, (v - mid) / half)); // -1 (cold/blue) .. +1 (hot/red)
-      if (t < 0) { const k = -t; return [lerp(255,40,k), lerp(255,90,k), lerp(255,200,k)]; }
-      const k = t; return [lerp(255,210,k), lerp(255,40,k), lerp(255,40,k)];
+      const t = Math.max(-1, Math.min(1, (v - mid) / half));
+      if (t < 0) {
+        const k = -t;
+        return [lerp(255,40,k), lerp(255,90,k), lerp(255,200,k)];
+      }
+      const k = t;
+      return [lerp(255,210,k), lerp(255,40,k), lerp(255,40,k)];
     }
 
     for (let i = 0; i < nlat; i++) {
       for (let j = 0; j < nlon; j++) {
-        const [r, g, b] = colorFor(values[i][j]);
+        const v = Number(values[i][j]);
         const idx = (i * nlon + j) * 4;
-        img.data[idx] = r; img.data[idx+1] = g; img.data[idx+2] = b; img.data[idx+3] = 255;
+
+        // null/NaN values become transparent.
+        if (!Number.isFinite(v)) {
+          img.data[idx] = 0;
+          img.data[idx + 1] = 0;
+          img.data[idx + 2] = 0;
+          img.data[idx + 3] = 0;
+          continue;
+        }
+
+        const [r, g, b] = colorFor(v);
+        img.data[idx] = r;
+        img.data[idx + 1] = g;
+        img.data[idx + 2] = b;
+        img.data[idx + 3] = 255;
       }
     }
+
     ctx.putImageData(img, 0, 0);
     return canvas.toDataURL('image/png');
   }
