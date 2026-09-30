@@ -261,26 +261,53 @@
   //   heatmap: [[...], ...]                       (legacy, shown as "Heatmap")
   //   heatmap: { label: "heat1", values: [[...], ...] }
   function normalizeHeatmaps(data) {
-    const raw = data.heatmaps ?? (data.heatmap != null ? [data.heatmap] : []);
+    // Preferred format:
+    //   heatmap: [
+    //     { label: "HadGEM", values: [[...], [...], ...] },
+    //     { label: "CESM",   values: [[...], [...], ...] }
+    //   ]
+    // Also accept the same format under `heatmaps`, plus a bare 2-D array.
+    const rawInput = data.heatmaps ?? data.heatmap;
+    if (rawInput == null) return [];
+
     const result = [];
 
-    if (Array.isArray(raw)) {
-      raw.forEach((item, i) => {
-        if (item && !Array.isArray(item) && item.values) {
-          result.push({ label: item.label || `Heatmap ${i + 1}`, values: item.values });
-        } else {
-          result.push({ label: `Heatmap ${i + 1}`, values: item });
-        }
-      });
-    } else if (raw && typeof raw === 'object') {
-      Object.entries(raw).forEach(([key, item]) => {
-        if (item && !Array.isArray(item) && item.values) {
+    // A list of labeled heatmaps is distinguished from a bare 2-D array by
+    // checking whether its first element is an object with a `values` field.
+    if (Array.isArray(rawInput)) {
+      const isLabeledList = rawInput.length > 0 &&
+        rawInput.every(item =>
+          item && !Array.isArray(item) &&
+          typeof item === 'object' &&
+          Object.prototype.hasOwnProperty.call(item, 'values')
+        );
+
+      if (isLabeledList) {
+        rawInput.forEach((item, i) => {
+          result.push({
+            label: item.label || `Heatmap ${i + 1}`,
+            values: item.values
+          });
+        });
+      } else {
+        // Legacy bare 2-D array: heatmap: [[...], [...], ...]
+        result.push({ label: 'Heatmap', values: rawInput });
+      }
+    } else if (rawInput && typeof rawInput === 'object') {
+      // Also accept: heatmaps: {
+      //   HadGEM: [[...], ...],
+      //   CESM: { label: "CESM", values: [[...], ...] }
+      // }
+      Object.entries(rawInput).forEach(([key, item]) => {
+        if (item && !Array.isArray(item) && typeof item === 'object' &&
+            Object.prototype.hasOwnProperty.call(item, 'values')) {
           result.push({ label: item.label || key, values: item.values });
         } else {
           result.push({ label: key, values: item });
         }
       });
     }
+
     return result;
   }
 
