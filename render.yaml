@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: climate-globe
+    runtime: static
+    buildCommand: ""        # no build step needed, it's plain HTML/JS
+    staticPublishPath: .    # index.html and data.js live at the repo root

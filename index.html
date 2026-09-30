@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Climate Globe</title>
+
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script src="https://unpkg.com/globe.gl@2.32.2/dist/globe.gl.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
+<style>
+  :root{
+    --bg:#04070d; --panel-bg:#0b1220; --panel-border:#1c2740;
+    --text:#e7ecf5; --muted:#8fa0bd; --accent:#5fb4ff; --accent2:#ff6b6b;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;width:100%;height:100%;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;overflow:hidden;}
+
+  #globeViz{position:fixed;inset:0;}
+
+  #topbar{position:fixed;top:14px;left:14px;z-index:20;display:flex;gap:8px;align-items:center;}
+  #toggleBtn{
+    background:rgba(11,18,32,0.85);border:1px solid var(--panel-border);color:var(--text);
+    padding:9px 14px;border-radius:20px;font-size:13px;cursor:pointer;backdrop-filter:blur(6px);
+    display:flex;align-items:center;gap:8px;
+  }
+  #toggleBtn:hover{border-color:var(--accent);}
+  #toggleBtn .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);}
+  #legendNote{font-size:11px;color:var(--muted);background:rgba(11,18,32,0.7);padding:6px 10px;border-radius:12px;}
+
+  /* ---- side / fullscreen panel ---- */
+  #panel{
+    position:fixed;top:0;right:0;height:100%;width:420px;max-width:100vw;
+    background:var(--panel-bg);border-left:1px solid var(--panel-border);
+    transform:translateX(100%);transition:transform .25s ease;
+    overflow-y:auto;z-index:30;padding:18px 18px 40px;
+  }
+  #panel.open{transform:translateX(0);}
+  @media (max-width:720px){
+    #panel{width:100vw;}
+  }
+  #panelHeader{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}
+  #panelTitle{font-size:20px;font-weight:600;}
+  #panelSub{font-size:12px;color:var(--muted);margin-top:2px;}
+  #closeBtn{
+    background:none;border:1px solid var(--panel-border);color:var(--text);
+    width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer;flex:none;
+  }
+  #closeBtn:hover{border-color:var(--accent2);color:var(--accent2);}
+
+  .chartBlock{margin-top:22px;}
+  .chartBlock h3{font-size:13px;font-weight:600;margin:0 0 2px;color:var(--text);}
+  .chartBlock p.sub{font-size:11px;color:var(--muted);margin:0 0 8px;}
+  .chartBlock canvas{width:100% !important;}
+  .returnGrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media (max-width:520px){ .returnGrid{grid-template-columns:1fr;} }
+
+  #emptyState{display:flex;height:100%;align-items:center;justify-content:center;
+    color:var(--muted);font-size:13px;text-align:center;padding:40px;}
+</style>
+</head>
+<body>
+
+<div id="globeViz"></div>
+
+<div id="topbar">
+  <button id="toggleBtn"><span class="dot" id="toggleDot"></span><span id="toggleLabel">Satellite view</span></button>
+  <div id="legendNote">Scroll to zoom &middot; drag to rotate &middot; click a city</div>
+</div>
+
+<div id="panel">
+  <div id="panelHeader">
+    <div>
+      <div id="panelTitle">&nbsp;</div>
+      <div id="panelSub"></div>
+    </div>
+    <button id="closeBtn" aria-label="Close">&#10005;</button>
+  </div>
+  <div id="panelBody"><div id="emptyState">Click a city on the globe</div></div>
+</div>
+
+<script src="data.js"></script>
+<script>
+(function () {
+  const DATA = window.CLIMATE_DATA;
+  if (!DATA) { console.error('data.js did not define window.CLIMATE_DATA'); return; }
+
+  const SATELLITE_URL = 'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg';
+  const BUMP_URL = 'https://unpkg.com/three-globe/example/img/earth-topology.png';
+
+  // ---------------------------------------------------------------
+  // Build the heatmap as an equirectangular texture from the grid
+  // ---------------------------------------------------------------
+  function buildHeatmapDataUrl(heatmap) {
+    const { nlat, nlon, values } = heatmap;
+    const canvas = document.createElement('canvas');
+    canvas.width = nlon; canvas.height = nlat;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(nlon, nlat);
+
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < nlat; i++) for (let j = 0; j < nlon; j++) {
+      const v = values[i][j];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    const mid = (min + max) / 2;
+    const half = Math.max(max - mid, mid - min) || 1;
+
+    // simple blue -> white -> red diverging colormap
+    function lerp(a, b, k) { return a + (b - a) * k; }
+    function colorFor(v) {
+      const t = Math.max(-1, Math.min(1, (v - mid) / half)); // -1 (cold/blue) .. +1 (hot/red)
+      if (t < 0) { const k = -t; return [lerp(255,40,k), lerp(255,90,k), lerp(255,200,k)]; }
+      const k = t; return [lerp(255,210,k), lerp(255,40,k), lerp(255,40,k)];
+    }
+
+    for (let i = 0; i < nlat; i++) {
+      for (let j = 0; j < nlon; j++) {
+        const [r, g, b] = colorFor(values[i][j]);
+        const idx = (i * nlon + j) * 4;
+        img.data[idx] = r; img.data[idx+1] = g; img.data[idx+2] = b; img.data[idx+3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return canvas.toDataURL('image/png');
+  }
+
+  // ---------------------------------------------------------------
+  // City marker sprites: white dot / thick black outline, red when selected
+  // ---------------------------------------------------------------
+  function dotTexture(fill) {
+    const size = 64;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.beginPath();
+    ctx.arc(size/2, size/2, size*0.30, 0, Math.PI*2);
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = '#0a0a0a';
+    ctx.lineWidth = size*0.14;
+    ctx.fill();
+    ctx.stroke();
+    return new THREE.CanvasTexture(c);
+  }
+  const TEX_WHITE = dotTexture('#ffffff');
+  const TEX_RED = dotTexture('#ff3b3b');
+
+  let selectedCityId = null;
+  const spriteByCity = {};
+
+  function makeCitySprite(city) {
+    const mat = new THREE.SpriteMaterial({ map: TEX_WHITE, depthTest: false, transparent: true });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(5.5, 5.5, 1);
+    sprite.renderOrder = 999;
+    spriteByCity[city.id] = sprite;
+    return sprite;
+  }
+
+  function setSelected(cityId) {
+    if (selectedCityId && spriteByCity[selectedCityId]) spriteByCity[selectedCityId].material.map = TEX_WHITE;
+    selectedCityId = cityId;
+    if (cityId && spriteByCity[cityId]) spriteByCity[cityId].material.map = TEX_RED;
+  }
+
+  // ---------------------------------------------------------------
+  // Globe setup
+  // ---------------------------------------------------------------
+  const world = Globe()
+    .globeImageUrl(SATELLITE_URL)
+    .bumpImageUrl(BUMP_URL)
+    .backgroundColor('#04070d')
+    .showAtmosphere(true)
+    .atmosphereColor('#5fb4ff')
+    .atmosphereAltitude(0.18)
+    .objectsData(DATA.cities)
+    .objectLat('lat')
+    .objectLng('lon')
+    .objectAltitude(0.01)
+    .objectThreeObject(makeCitySprite)
+    .onObjectClick(city => openCity(city))
+    (document.getElementById('globeViz'));
+
+  // Limit zoom: prevent zooming in past ~roughly a 10x10 degree view,
+  // and prevent zooming all the way out past the default framing.
+  // Tune ZOOM_IN_LIMIT / ZOOM_OUT_LIMIT (globe.gl camera-distance units,
+  // where the globe radius is 100) if 10x10deg looks off on your data.
+  const controls = world.controls();
+  controls.minDistance = 130;   // stops zooming in tighter than roughly 10deg of arc
+  controls.maxDistance = 420;   // stops zooming out past the full-globe default
+  controls.enablePan = false;
+
+  world.pointOfView({ lat: 20, lng: 0, altitude: 2.2 }, 0);
+
+  window.addEventListener('resize', () => {
+    world.width(window.innerWidth).height(window.innerHeight);
+  });
+
+  // ---------------------------------------------------------------
+  // Satellite / heatmap toggle
+  // ---------------------------------------------------------------
+  let heatmapUrl = null;
+  let showingHeatmap = false;
+  const toggleBtn = document.getElementById('toggleBtn');
+  const toggleLabel = document.getElementById('toggleLabel');
+  const toggleDot = document.getElementById('toggleDot');
+
+  toggleBtn.addEventListener('click', () => {
+    showingHeatmap = !showingHeatmap;
+    if (showingHeatmap) {
+      if (!heatmapUrl) heatmapUrl = buildHeatmapDataUrl(DATA.heatmap);
+      world.globeImageUrl(heatmapUrl);
+      toggleLabel.textContent = 'Heatmap view';
+      toggleDot.style.background = 'var(--accent2)';
+    } else {
+      world.globeImageUrl(SATELLITE_URL);
+      toggleLabel.textContent = 'Satellite view';
+      toggleDot.style.background = 'var(--accent)';
+    }
+  });
+
+  // ---------------------------------------------------------------
+  // Panel + charts
+  // ---------------------------------------------------------------
+  const panel = document.getElementById('panel');
+  const panelTitle = document.getElementById('panelTitle');
+  const panelSub = document.getElementById('panelSub');
+  const panelBody = document.getElementById('panelBody');
+  const closeBtn = document.getElementById('closeBtn');
+
+  let liveCharts = [];
+  function destroyCharts() { liveCharts.forEach(c => c.destroy()); liveCharts = []; }
+
+  const PALETTE = ['#5fb4ff', '#9fd8ff', '#ff6b6b', '#ffb199']; // caseIndex -> color
+  const DASH = [[], [], [], []]; // could differentiate scenarios with dash patterns
+  function caseStyle(idx, scenarioIdx) {
+    return { color: PALETTE[idx], dash: scenarioIdx === 1 ? [6, 4] : [] };
+  }
+
+  function baseChartOptions(extra) {
+    return Object.assign({
+      responsive: true,
+      animation: false,
+      interaction: { mode: 'nearest', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#c7d2e6', boxWidth: 12, font: { size: 10 } } },
+        tooltip: { titleFont: { size: 11 }, bodyFont: { size: 11 } },
+      },
+      scales: {
+        x: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        y: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+      },
+    }, extra || {});
+  }
+
+  function renderClimatology(canvas, cd) {
+    const cases = Object.keys(cd.climatology);
+    const datasets = [];
+    cases.forEach((caseName, i) => {
+      const { tas, tasmin, tasmax } = cd.climatology[caseName];
+      const style = caseStyle(i, caseName.includes('Scenario 2') ? 1 : 0);
+      datasets.push({
+        label: caseName + ' (min)', data: tasmin, borderWidth: 0, pointRadius: 0,
+        fill: false, hidden: false, borderColor: 'transparent', backgroundColor: 'transparent',
+        order: 3,
+      });
+      datasets.push({
+        label: caseName + ' (min-max range)', data: tasmax, borderWidth: 0, pointRadius: 0,
+        fill: '-1', backgroundColor: style.color + '33', order: 2,
+      });
+      datasets.push({
+        label: caseName, data: tas, borderColor: style.color, backgroundColor: style.color,
+        borderDash: style.dash, borderWidth: 2, pointRadius: 0, fill: false, tension: 0.25, order: 1,
+      });
+    });
+    const chart = new Chart(canvas, {
+      type: 'line',
+      data: { labels: cd.months, datasets },
+      options: baseChartOptions({
+        plugins: {
+          legend: {
+            labels: {
+              color: '#c7d2e6', boxWidth: 12, font: { size: 10 },
+              filter: item => !item.text.includes('(min)') && !item.text.includes('(min-max')
+            }
+          }
+        },
+        scales: { y: { title: { display: true, text: 'Temperature (°C)', color: '#8fa0bd', font: { size: 10 } },
+          ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          x: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } } }
+      }),
+    });
+    liveCharts.push(chart);
+  }
+
+  function renderAnomaly(canvas, cd, model) {
+    const a = cd.anomaly[model];
+    const varColors = { tasmin: '#5fb4ff', tas: '#8bd17c', tasmax: '#ff6b6b' };
+    const datasets = ['tasmin', 'tas', 'tasmax'].map(v => ({
+      label: v, data: a[v], borderColor: varColors[v], backgroundColor: varColors[v],
+      borderWidth: 2, pointRadius: 2, tension: 0.25,
+    }));
+    const chart = new Chart(canvas, {
+      type: 'line',
+      data: { labels: cd.months, datasets },
+      options: baseChartOptions({
+        scales: {
+          y: { title: { display: true, text: 'Δ (°C), Scen2 − Scen1', color: '#8fa0bd', font: { size: 10 } },
+            ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.08)' } },
+          x: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        }
+      }),
+    });
+    liveCharts.push(chart);
+  }
+
+  function renderReturnPanel(canvas, cd, panelName) {
+    const p = cd.returnPeriods.panels[panelName];
+    const T = cd.returnPeriods.T;
+    const cases = Object.keys(p.curves);
+    const datasets = cases.map((caseName, i) => {
+      const style = caseStyle(i, caseName.includes('Scenario 2') ? 1 : 0);
+      return {
+        label: caseName,
+        data: T.map((t, k) => ({ x: t, y: p.curves[caseName][k] })),
+        borderColor: style.color, backgroundColor: style.color, borderDash: style.dash,
+        borderWidth: 2, pointRadius: 3, tension: 0,
+      };
+    });
+    const chart = new Chart(canvas, {
+      type: 'line',
+      data: { datasets },
+      options: baseChartOptions({
+        plugins: { legend: { display: false }, tooltip: { callbacks: { title: c => `T = ${c[0].parsed.x} yr` } } },
+        scales: {
+          x: { type: 'logarithmic', min: 2, max: 100,
+            ticks: { color: '#8fa0bd', font: { size: 9 }, callback: v => T.includes(v) ? v : '' },
+            grid: { color: 'rgba(255,255,255,0.06)' } },
+          y: { ticks: { color: '#8fa0bd', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        }
+      }),
+    });
+    liveCharts.push(chart);
+  }
+
+  function openCity(city) {
+    setSelected(city.id);
+    const cd = DATA.cityData[city.id];
+    panelTitle.textContent = city.name;
+    panelSub.textContent = `${city.lat.toFixed(2)}, ${city.lon.toFixed(2)}`;
+    destroyCharts();
+
+    if (!cd) {
+      panelBody.innerHTML = '<div id="emptyState">No climate data for this city yet.</div>';
+      panel.classList.add('open');
+      return;
+    }
+
+    panelBody.innerHTML = `
+      <div class="chartBlock">
+        <h3>Monthly climatology</h3>
+        <p class="sub">Mean temperature, shaded min&ndash;max range, all model/scenario cases</p>
+        <canvas id="c-clim" height="220"></canvas>
+      </div>
+      <div class="chartBlock">
+        <h3>Anomaly &mdash; ${cd.models[0]}</h3>
+        <p class="sub">Scenario 2 minus Scenario 1, by month</p>
+        <canvas id="c-anom-0" height="150"></canvas>
+      </div>
+      <div class="chartBlock">
+        <h3>Anomaly &mdash; ${cd.models[1]}</h3>
+        <p class="sub">Scenario 2 minus Scenario 1, by month</p>
+        <canvas id="c-anom-1" height="150"></canvas>
+      </div>
+      <div class="chartBlock">
+        <h3>Return periods</h3>
+        <p class="sub">Gumbel-fit extremes across all cases</p>
+        <div class="returnGrid" id="returnGrid"></div>
+      </div>
+    `;
+
+    renderClimatology(document.getElementById('c-clim'), cd);
+    renderAnomaly(document.getElementById('c-anom-0'), cd, cd.models[0]);
+    renderAnomaly(document.getElementById('c-anom-1'), cd, cd.models[1]);
+
+    const grid = document.getElementById('returnGrid');
+    Object.keys(cd.returnPeriods.panels).forEach((panelName, i) => {
+      const wrap = document.createElement('div');
+      wrap.innerHTML = `<p class="sub" style="margin-bottom:4px;">${panelName}</p><canvas id="c-rp-${i}" height="140"></canvas>`;
+      grid.appendChild(wrap);
+      renderReturnPanel(wrap.querySelector('canvas'), cd, panelName);
+    });
+
+    panel.classList.add('open');
+  }
+
+  function closePanel() {
+    panel.classList.remove('open');
+    setSelected(null);
+  }
+  closeBtn.addEventListener('click', closePanel);
+})();
+</script>
+</body>
+</html>
