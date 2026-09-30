@@ -20,8 +20,8 @@
 
   #globeViz{position:fixed;inset:0;}
 
-  #topbar{position:fixed;top:14px;left:14px;z-index:20;display:flex;gap:8px;align-items:center;}
-  #toggleBtn{
+  #topbar{position:fixed;top:14px;left:14px;z-index:20;display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:calc(100vw - 28px);}
+  .viewBtn{
     background:rgba(11,18,32,0.85);border:1px solid var(--panel-border);color:var(--text);
     padding:9px 14px;border-radius:20px;font-size:13px;cursor:pointer;backdrop-filter:blur(6px);
     display:flex;align-items:center;gap:8px;
@@ -29,6 +29,17 @@
   #toggleBtn:hover{border-color:var(--accent);}
   #toggleBtn .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);}
   #legendNote{font-size:11px;color:var(--muted);background:rgba(11,18,32,0.7);padding:6px 10px;border-radius:12px;}
+  #heatLegend{
+    display:none;min-width:240px;max-width:360px;padding:8px 10px;border-radius:12px;
+    background:rgba(11,18,32,0.88);border:1px solid var(--panel-border);
+    backdrop-filter:blur(6px);font-size:11px;color:var(--muted);
+  }
+  #heatLegend.visible{display:block;}
+  #heatLegendTitle{color:var(--text);font-weight:600;margin-bottom:5px;}
+  #heatLegendBar{height:10px;border-radius:5px;border:1px solid rgba(255,255,255,.15);}
+  #heatLegendLabels{display:flex;justify-content:space-between;gap:8px;margin-top:4px;font-variant-numeric:tabular-nums;}
+  .viewBtn.active{border-color:var(--accent);box-shadow:0 0 0 1px rgba(95,180,255,.25) inset;}
+  .viewBtn .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);}
 
   /* ---- side / fullscreen panel ---- */
   #panel{
@@ -38,6 +49,9 @@
     overflow-y:auto;z-index:30;padding:18px 18px 40px;
   }
   #panel.open{transform:translateX(0);}
+  #panel.fullscreen{width:100vw;max-width:none;}
+  #panel.fullscreen .chartBlock canvas{height:500px !important;}
+  #panel.fullscreen .returnGrid canvas{height:500px !important;}
   @media (max-width:720px){
     #panel{width:100vw;}
   }
@@ -49,11 +63,14 @@
     width:32px;height:32px;border-radius:50%;font-size:16px;cursor:pointer;flex:none;
   }
   #closeBtn:hover{border-color:var(--accent2);color:var(--accent2);}
+  #fullscreenBtn{background:none;border:1px solid var(--panel-border);color:var(--text);padding:7px 10px;border-radius:8px;font-size:12px;cursor:pointer;}
+  #fullscreenBtn:hover{border-color:var(--accent);}
+  #panelActions{display:flex;gap:8px;align-items:center;flex:none;}
 
   .chartBlock{margin-top:22px;}
   .chartBlock h3{font-size:13px;font-weight:600;margin:0 0 2px;color:var(--text);}
   .chartBlock p.sub{font-size:11px;color:var(--muted);margin:0 0 8px;}
-  .chartBlock canvas{width:100% !important;}
+  .chartBlock canvas{width:100% !important;height:260px !important;}
   .returnGrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
   @media (max-width:520px){ .returnGrid{grid-template-columns:1fr;} }
 
@@ -66,8 +83,9 @@
 <div id="globeViz"></div>
 
 <div id="topbar">
-  <button id="toggleBtn"><span class="dot" id="toggleDot"></span><span id="toggleLabel">Satellite view</span></button>
+  <div id="viewButtons"></div>
   <div id="legendNote">Scroll to zoom &middot; drag to rotate &middot; click a city</div>
+  <div id="heatLegend" aria-live="polite"><div id="heatLegendTitle"></div><div id="heatLegendBar"></div><div id="heatLegendLabels"><span id="heatLegendMin"></span><span id="heatLegendMax"></span></div></div>
 </div>
 
 <div id="panel">
@@ -76,7 +94,10 @@
       <div id="panelTitle">&nbsp;</div>
       <div id="panelSub"></div>
     </div>
-    <button id="closeBtn" aria-label="Close">&#10005;</button>
+    <div id="panelActions">
+      <button id="fullscreenBtn" aria-label="Toggle fullscreen">Fullscreen</button>
+      <button id="closeBtn" aria-label="Close">&#10005;</button>
+    </div>
   </div>
   <div id="panelBody"><div id="emptyState">Click a city on the globe</div></div>
 </div>
@@ -93,53 +114,49 @@
   // ---------------------------------------------------------------
   // Build the heatmap as an equirectangular texture from the grid
   // ---------------------------------------------------------------
-  function buildHeatmapDataUrl(heatmap) {
-    // Payload format: { values: [[...], [...], ...] }
-    // Any rectangular 2-D array is supported; dimensions are inferred.
-    const values = heatmap.values;
-    if (!Array.isArray(values) || values.length === 0 ||
-        !Array.isArray(values[0]) || values[0].length === 0) {
-      throw new Error('DATA.heatmap.values must be a non-empty 2-D array');
-    }
-
-    const nlat = values.length;
-    const nlon = values[0].length;
-    for (let i = 0; i < nlat; i++) {
-      if (!Array.isArray(values[i]) || values[i].length !== nlon) {
-        throw new Error('DATA.heatmap.values must be rectangular');
+  function getHeatmapStats(values) {
+    let min = Infinity, max = -Infinity;
+    for (const row of values) for (const v of row) {
+      if (Number.isFinite(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
       }
     }
+    if (min === Infinity || max === -Infinity) {
+      throw new Error('Heatmap contains no finite values.');
+    }
+    return { min, max };
+  }
 
+  function buildHeatmapDataUrl(heatmap) {
+    const values = Array.isArray(heatmap) ? heatmap : heatmap.values;
+    validateHeatmapValues(values, heatmap.label || 'heatmap');
+
+    // Equirectangular textures have latitude +90° at the top and -90° at
+    // the bottom. Reverse the rows when the supplied grid is south -> north.
+    // This is the expected ordering for the climate grids used here.
+    const renderValues = values.slice().reverse();
+    const nlat = renderValues.length;
+    const nlon = renderValues[0].length;
     const canvas = document.createElement('canvas');
-    canvas.width = nlon;
-    canvas.height = nlat;
+    canvas.width = nlon; canvas.height = nlat;
     const ctx = canvas.getContext('2d');
     const img = ctx.createImageData(nlon, nlat);
 
-    // The array covers the complete globe with uniform spacing:
-    // columns = longitude -180 .. +180
-    // rows    = latitude  +90  .. -90
-    // Therefore row 0 is the northern edge and row nlat-1 is the southern edge.
-    let min = Infinity, max = -Infinity;
-    for (let i = 0; i < nlat; i++) {
-      for (let j = 0; j < nlon; j++) {
-        const v = Number(values[i][j]);
-        if (Number.isFinite(v)) {
-          min = Math.min(min, v);
-          max = Math.max(max, v);
-        }
-      }
-    }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) {
-      throw new Error('DATA.heatmap.values contains no finite numbers');
-    }
-
-    const mid = (min + max) / 2;
-    const half = Math.max(max - mid, mid - min) || 1;
+    const { min, max } = getHeatmapStats(values);
+    const hasZero = min < 0 && max > 0;
+    const scale = hasZero ? Math.max(Math.abs(min), Math.abs(max)) : null;
 
     function lerp(a, b, k) { return a + (b - a) * k; }
     function colorFor(v) {
-      const t = Math.max(-1, Math.min(1, (v - mid) / half));
+      let t;
+      if (hasZero) {
+        // Keep zero white and use a symmetric scale when the data crosses zero.
+        t = Math.max(-1, Math.min(1, v / scale));
+      } else {
+        const span = max - min || 1;
+        t = 2 * ((v - min) / span) - 1;
+      }
       if (t < 0) {
         const k = -t;
         return [lerp(255,40,k), lerp(255,90,k), lerp(255,200,k)];
@@ -150,26 +167,16 @@
 
     for (let i = 0; i < nlat; i++) {
       for (let j = 0; j < nlon; j++) {
-        const v = Number(values[i][j]);
+        const v = renderValues[i][j];
         const idx = (i * nlon + j) * 4;
-
-        // null/NaN values become transparent.
         if (!Number.isFinite(v)) {
-          img.data[idx] = 0;
-          img.data[idx + 1] = 0;
-          img.data[idx + 2] = 0;
-          img.data[idx + 3] = 0;
-          continue;
+          img.data[idx] = 0; img.data[idx+1] = 0; img.data[idx+2] = 0; img.data[idx+3] = 0;
+        } else {
+          const [r, g, b] = colorFor(v);
+          img.data[idx] = r; img.data[idx+1] = g; img.data[idx+2] = b; img.data[idx+3] = 255;
         }
-
-        const [r, g, b] = colorFor(v);
-        img.data[idx] = r;
-        img.data[idx + 1] = g;
-        img.data[idx + 2] = b;
-        img.data[idx + 3] = 255;
       }
     }
-
     ctx.putImageData(img, 0, 0);
     return canvas.toDataURL('image/png');
   }
@@ -246,27 +253,144 @@
   });
 
   // ---------------------------------------------------------------
-  // Satellite / heatmap toggle
+  // Satellite / heatmap views
   // ---------------------------------------------------------------
-  let heatmapUrl = null;
-  let showingHeatmap = false;
-  const toggleBtn = document.getElementById('toggleBtn');
-  const toggleLabel = document.getElementById('toggleLabel');
-  const toggleDot = document.getElementById('toggleDot');
+  // Supported data formats:
+  //   heatmaps: [{ label: "heat1", values: [[...], ...] }, ...]
+  //   heatmaps: { heat1: [[...], ...], heat2: { label: "...", values: [...] } }
+  //   heatmap: [[...], ...]                       (legacy, shown as "Heatmap")
+  //   heatmap: { label: "heat1", values: [[...], ...] }
+  function normalizeHeatmaps(data) {
+    const raw = data.heatmaps ?? (data.heatmap != null ? [data.heatmap] : []);
+    const result = [];
 
-  toggleBtn.addEventListener('click', () => {
-    showingHeatmap = !showingHeatmap;
-    if (showingHeatmap) {
-      if (!heatmapUrl) heatmapUrl = buildHeatmapDataUrl(DATA.heatmap);
-      world.globeImageUrl(heatmapUrl);
-      toggleLabel.textContent = 'Heatmap view';
-      toggleDot.style.background = 'var(--accent2)';
-    } else {
-      world.globeImageUrl(SATELLITE_URL);
-      toggleLabel.textContent = 'Satellite view';
-      toggleDot.style.background = 'var(--accent)';
+    if (Array.isArray(raw)) {
+      raw.forEach((item, i) => {
+        if (item && !Array.isArray(item) && item.values) {
+          result.push({ label: item.label || `Heatmap ${i + 1}`, values: item.values });
+        } else {
+          result.push({ label: `Heatmap ${i + 1}`, values: item });
+        }
+      });
+    } else if (raw && typeof raw === 'object') {
+      Object.entries(raw).forEach(([key, item]) => {
+        if (item && !Array.isArray(item) && item.values) {
+          result.push({ label: item.label || key, values: item.values });
+        } else {
+          result.push({ label: key, values: item });
+        }
+      });
     }
-  });
+    return result;
+  }
+
+  function validateHeatmapValues(values, label) {
+    if (!Array.isArray(values) || values.length === 0 || !Array.isArray(values[0]) || values[0].length === 0) {
+      throw new Error(`Heatmap "${label}" must contain a non-empty 2-D array.`);
+    }
+    const nlon = values[0].length;
+    for (let i = 0; i < values.length; i++) {
+      if (!Array.isArray(values[i]) || values[i].length !== nlon) {
+        throw new Error(`Heatmap "${label}" must be rectangular: row 0 has ${nlon} columns, row ${i} has ${values[i]?.length ?? 0}.`);
+      }
+    }
+  }
+
+  const heatmaps = normalizeHeatmaps(DATA);
+  const heatmapUrls = new Map();
+  const heatmapStats = new Map();
+
+  const viewButtons = document.getElementById('viewButtons');
+  const heatLegend = document.getElementById('heatLegend');
+  const heatLegendTitle = document.getElementById('heatLegendTitle');
+  const heatLegendBar = document.getElementById('heatLegendBar');
+  const heatLegendMin = document.getElementById('heatLegendMin');
+  const heatLegendMax = document.getElementById('heatLegendMax');
+  let activeView = 'satellite';
+
+  function addViewButton(id, label, kind) {
+    const btn = document.createElement('button');
+    btn.className = 'viewBtn';
+    btn.dataset.view = id;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    const text = document.createElement('span');
+    text.textContent = label;
+    btn.append(dot, text);
+    btn.addEventListener('click', () => setView(id, kind));
+    viewButtons.appendChild(btn);
+    return btn;
+  }
+
+  addViewButton('satellite', 'Satellite', 'satellite');
+  heatmaps.forEach((hm, i) => addViewButton(`heatmap-${i}`, hm.label, 'heatmap'));
+
+  function setActiveButton(id) {
+    viewButtons.querySelectorAll('.viewBtn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.view === id);
+    });
+  }
+
+  function formatLegendValue(v) {
+    if (!Number.isFinite(v)) return '';
+    const abs = Math.abs(v);
+    if (abs >= 1000 || (abs > 0 && abs < 0.01)) return v.toExponential(2);
+    if (abs >= 100) return v.toFixed(0);
+    if (abs >= 10) return v.toFixed(1);
+    return v.toFixed(2);
+  }
+
+  function showHeatmapLegend(hm) {
+    let stats = heatmapStats.get(hm);
+    if (!stats) {
+      validateHeatmapValues(hm.values, hm.label);
+      stats = getHeatmapStats(hm.values);
+      heatmapStats.set(hm, stats);
+    }
+    const { min, max } = stats;
+    const hasZero = min < 0 && max > 0;
+    heatLegendTitle.textContent = hm.label;
+    heatLegendMin.textContent = formatLegendValue(min);
+    heatLegendMax.textContent = formatLegendValue(max);
+    if (hasZero) {
+      const scale = Math.max(Math.abs(min), Math.abs(max));
+      const zeroPct = ((0 - (-scale)) / (2 * scale)) * 100;
+      heatLegendBar.style.background =
+        `linear-gradient(to right, rgb(40,90,200) 0%, rgb(255,255,255) ${zeroPct}%, rgb(255,40,40) 100%)`;
+      heatLegendBar.title = `Min ${formatLegendValue(min)} · 0 · Max ${formatLegendValue(max)}`;
+    } else {
+      heatLegendBar.style.background =
+        'linear-gradient(to right, rgb(40,90,200), rgb(255,255,255), rgb(255,40,40))';
+      heatLegendBar.title = `Min ${formatLegendValue(min)} · Max ${formatLegendValue(max)}`;
+    }
+    heatLegend.classList.add('visible');
+  }
+
+  function hideHeatmapLegend() {
+    heatLegend.classList.remove('visible');
+  }
+
+  function setView(id, kind) {
+    activeView = id;
+    setActiveButton(id);
+
+    if (kind === 'satellite') {
+      world.globeImageUrl(SATELLITE_URL);
+      hideHeatmapLegend();
+      return;
+    }
+
+    const index = Number(id.split('-')[1]);
+    const hm = heatmaps[index];
+    validateHeatmapValues(hm.values, hm.label);
+    if (!heatmapUrls.has(index)) {
+      heatmapUrls.set(index, buildHeatmapDataUrl({ values: hm.values, label: hm.label }));
+    }
+    world.globeImageUrl(heatmapUrls.get(index));
+    showHeatmapLegend(hm);
+  }
+
+  setActiveButton('satellite');
 
   // ---------------------------------------------------------------
   // Panel + charts
@@ -276,6 +400,15 @@
   const panelSub = document.getElementById('panelSub');
   const panelBody = document.getElementById('panelBody');
   const closeBtn = document.getElementById('closeBtn');
+  const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+  fullscreenBtn.addEventListener('click', () => {
+    const isFullscreen = panel.classList.toggle('fullscreen');
+    fullscreenBtn.textContent = isFullscreen ? 'Exit fullscreen' : 'Fullscreen';
+    // Let Chart.js recalculate dimensions after the CSS transition/layout change.
+    requestAnimationFrame(() => liveCharts.forEach(c => c.resize()));
+  });
+
 
   let liveCharts = [];
   function destroyCharts() { liveCharts.forEach(c => c.destroy()); liveCharts = []; }
@@ -289,6 +422,7 @@
   function baseChartOptions(extra) {
     return Object.assign({
       responsive: true,
+      maintainAspectRatio: false,
       animation: false,
       interaction: { mode: 'nearest', intersect: false },
       plugins: {
@@ -409,17 +543,17 @@
       <div class="chartBlock">
         <h3>Monthly climatology</h3>
         <p class="sub">Mean temperature, shaded min&ndash;max range, all model/scenario cases</p>
-        <canvas id="c-clim" height="220"></canvas>
+        <canvas id="c-clim"></canvas>
       </div>
       <div class="chartBlock">
         <h3>Anomaly &mdash; ${cd.models[0]}</h3>
         <p class="sub">Scenario 2 minus Scenario 1, by month</p>
-        <canvas id="c-anom-0" height="150"></canvas>
+        <canvas id="c-anom-0"></canvas>
       </div>
       <div class="chartBlock">
         <h3>Anomaly &mdash; ${cd.models[1]}</h3>
         <p class="sub">Scenario 2 minus Scenario 1, by month</p>
-        <canvas id="c-anom-1" height="150"></canvas>
+        <canvas id="c-anom-1"></canvas>
       </div>
       <div class="chartBlock">
         <h3>Return periods</h3>
@@ -435,7 +569,7 @@
     const grid = document.getElementById('returnGrid');
     Object.keys(cd.returnPeriods.panels).forEach((panelName, i) => {
       const wrap = document.createElement('div');
-      wrap.innerHTML = `<p class="sub" style="margin-bottom:4px;">${panelName}</p><canvas id="c-rp-${i}" height="140"></canvas>`;
+      wrap.innerHTML = `<p class="sub" style="margin-bottom:4px;">${panelName}</p><canvas id="c-rp-${i}"></canvas>`;
       grid.appendChild(wrap);
       renderReturnPanel(wrap.querySelector('canvas'), cd, panelName);
     });
