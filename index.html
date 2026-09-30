@@ -132,11 +132,44 @@
     const values = Array.isArray(heatmap) ? heatmap : heatmap.values;
     validateHeatmapValues(values, heatmap.label || 'heatmap');
 
-    // Equirectangular textures have latitude +90° at the top and -90° at
-    // the bottom, and longitude -180° at the left and +180° at the right.
-    // The supplied climate grids are assumed to be south -> north and
-    // +180° -> -180° in longitude, so reverse both axes for rendering.
-    const renderValues = values.slice().reverse().map(row => row.slice().reverse());
+    // Prefer coordinates stored with the heatmap. If they are omitted, fall
+    // back to the old behavior for backwards compatibility. Coordinates are
+    // used to put north at the top and longitude -180 at the left, rather than
+    // guessing the orientation from array order.
+    const lat = heatmap.lat ?? DATA.heatmapLat ?? DATA.lat;
+    const lon = heatmap.lon ?? DATA.heatmapLon ?? DATA.lon;
+
+    let renderValues;
+    if (Array.isArray(lat) && Array.isArray(lon)) {
+      if (lat.length !== values.length) {
+        throw new Error(`Heatmap "${heatmap.label || 'heatmap'}": lat has ${lat.length} entries but data has ${values.length} rows.`);
+      }
+      if (lon.length !== values[0].length) {
+        throw new Error(`Heatmap "${heatmap.label || 'heatmap'}": lon has ${lon.length} entries but data has ${values[0].length} columns.`);
+      }
+
+      // Equirectangular texture convention:
+      //   top    = +90° latitude
+      //   bottom = -90° latitude
+      //   left   = -180° longitude
+      //   right  = +180° longitude
+      // Normalize longitudes to [-180, 180), then sort the source indices.
+      // This handles grids supplied as 0..360, -180..180, descending, etc.
+      const latOrder = lat.map((v, i) => ({ v: Number(v), i }))
+        .sort((a, b) => b.v - a.v); // north -> south
+      const lonOrder = lon.map((v, i) => ({
+        v: ((Number(v) + 180) % 360 + 360) % 360 - 180,
+        i
+      })).sort((a, b) => a.v - b.v); // west -> east
+
+      renderValues = latOrder.map(({ i: ii }) =>
+        lonOrder.map(({ i: jj }) => values[ii][jj])
+      );
+    } else {
+      // Backwards-compatible fallback for old data without coordinate arrays.
+      renderValues = values.slice().reverse().map(row => row.slice().reverse());
+    }
+
     const nlat = renderValues.length;
     const nlon = renderValues[0].length;
     const canvas = document.createElement('canvas');
@@ -257,10 +290,10 @@
   // Satellite / heatmap views
   // ---------------------------------------------------------------
   // Supported data formats:
-  //   heatmaps: [{ label: "heat1", values: [[...], ...] }, ...]
+  //   heatmaps: [{ label: "heat1", lat: [...], lon: [...], values: [[...], ...] }, ...]
   //   heatmaps: { heat1: [[...], ...], heat2: { label: "...", values: [...] } }
   //   heatmap: [[...], ...]                       (legacy, shown as "Heatmap")
-  //   heatmap: { label: "heat1", values: [[...], ...] }
+  //   heatmap: { label: "heat1", lat: [...], lon: [...], values: [[...], ...] }
   function normalizeHeatmaps(data) {
     // Preferred format:
     //   heatmap: [
@@ -287,7 +320,9 @@
         rawInput.forEach((item, i) => {
           result.push({
             label: item.label || `Heatmap ${i + 1}`,
-            values: item.values
+            values: item.values,
+            lat: item.lat,
+            lon: item.lon
           });
         });
       } else {
