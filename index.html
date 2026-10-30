@@ -108,7 +108,9 @@
   const DATA = window.CLIMATE_DATA;
   if (!DATA) { console.error('data.js did not define window.CLIMATE_DATA'); return; }
 
-  const SATELLITE_URL = 'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg';
+  // Higher-resolution NASA Blue Marble (5400x2700) instead of the low-res
+  // texture bundled with three-globe's examples.
+  const SATELLITE_URL = 'https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg';
   const BUMP_URL = 'https://unpkg.com/three-globe/example/img/earth-topology.png';
 
   // ---------------------------------------------------------------
@@ -177,20 +179,14 @@
     const ctx = canvas.getContext('2d');
     const img = ctx.createImageData(nlon, nlat);
 
-    const { min, max } = getHeatmapStats(values);
-    const hasZero = min < 0 && max > 0;
-    const scale = hasZero ? Math.max(Math.abs(min), Math.abs(max)) : null;
+    // Fixed, symmetric color scale: clip at +/-CLIP so the colormap is
+    // comparable across heatmaps instead of auto-scaling to each one's
+    // own min/max. Values beyond the clip just saturate to the end color.
+    const CLIP = 2;
 
     function lerp(a, b, k) { return a + (b - a) * k; }
     function colorFor(v) {
-      let t;
-      if (hasZero) {
-        // Keep zero white and use a symmetric scale when the data crosses zero.
-        t = Math.max(-1, Math.min(1, v / scale));
-      } else {
-        const span = max - min || 1;
-        t = 2 * ((v - min) / span) - 1;
-      }
+      const t = Math.max(-1, Math.min(1, v / CLIP));
       if (t < 0) {
         const k = -t;
         return [lerp(255,40,k), lerp(255,90,k), lerp(255,200,k)];
@@ -279,6 +275,14 @@
   controls.minDistance = 130;   // stops zooming in tighter than roughly 10deg of arc
   controls.maxDistance = 420;   // stops zooming out past the full-globe default
   controls.enablePan = false;
+
+  // Smoother scrolling/rotation: inertial damping instead of motion stopping
+  // the instant the mouse/trackpad input stops, plus gentler zoom/rotate
+  // speeds so wheel-scroll zoom doesn't feel jumpy.
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.zoomSpeed = 0.6;
+  controls.rotateSpeed = 0.6;
 
   world.pointOfView({ lat: 20, lng: 0, altitude: 2.2 }, 0);
 
@@ -411,21 +415,17 @@
       heatmapStats.set(hm, stats);
     }
     const { min, max } = stats;
-    const hasZero = min < 0 && max > 0;
+    const CLIP = 2;
     heatLegendTitle.textContent = hm.label;
-    heatLegendMin.textContent = formatLegendValue(min);
-    heatLegendMax.textContent = formatLegendValue(max);
-    if (hasZero) {
-      const scale = Math.max(Math.abs(min), Math.abs(max));
-      const zeroPct = ((0 - (-scale)) / (2 * scale)) * 100;
-      heatLegendBar.style.background =
-        `linear-gradient(to right, rgb(40,90,200) 0%, rgb(255,255,255) ${zeroPct}%, rgb(255,40,40) 100%)`;
-      heatLegendBar.title = `Min ${formatLegendValue(min)} · 0 · Max ${formatLegendValue(max)}`;
-    } else {
-      heatLegendBar.style.background =
-        'linear-gradient(to right, rgb(40,90,200), rgb(255,255,255), rgb(255,40,40))';
-      heatLegendBar.title = `Min ${formatLegendValue(min)} · Max ${formatLegendValue(max)}`;
-    }
+    // The bar always represents the fixed -CLIP..+CLIP color scale (zero
+    // centered), regardless of the data's actual range, since the colormap
+    // itself clips at +/-CLIP. Labels show the fixed bounds, and note when
+    // the data's real min/max exceeds them (i.e. is being clipped).
+    heatLegendMin.textContent = formatLegendValue(-CLIP) + (min < -CLIP ? ` (data min ${formatLegendValue(min)})` : '');
+    heatLegendMax.textContent = formatLegendValue(CLIP) + (max > CLIP ? ` (data max ${formatLegendValue(max)})` : '');
+    heatLegendBar.style.background =
+      'linear-gradient(to right, rgb(40,90,200) 0%, rgb(255,255,255) 50%, rgb(255,40,40) 100%)';
+    heatLegendBar.title = `Clipped at ±${CLIP} · actual data range ${formatLegendValue(min)} to ${formatLegendValue(max)}`;
     heatLegend.classList.add('visible');
   }
 
