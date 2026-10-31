@@ -305,7 +305,7 @@
   // noticeably faster on both desktop and mobile.
   controls.enableDamping = true;
   controls.dampingFactor = 0.06;
-  controls.zoomSpeed = 1.15;
+  controls.zoomSpeed = 2.3;
   controls.rotateSpeed = 0.6;
 
   world.pointOfView({ lat: 20, lng: 0, altitude: 2.2 }, 0);
@@ -324,7 +324,7 @@
   // swap. Hysteresis (separate IN/OUT distances) plus "only apply once the
   // texture has fully loaded" prevent flicker/jumping at the threshold.
   // ---------------------------------------------------------------
-  const HIRES_URL = 'https://raw.githubusercontent.com/turban/webgl-earth/master/images/2_no_clouds_8k.jpg';
+  const HIRES_URL = 'https://raw.githubusercontent.com/charlespina/webgl-shaders/master/public/textures/2_no_clouds_8k.jpg';
   const HIRES_IN_DIST = 170;   // camera distance below this -> want hi-res
   const HIRES_OUT_DIST = 210;  // camera distance above this -> back to lo-res
   let hiResTex = null;          // cached high-res THREE.Texture
