@@ -379,21 +379,6 @@
     );
   }, { capture: true, passive: false });
 
-  (function smoothZoomLoop() {
-    const cam = world.camera();
-    const cur = cam.position.length();
-    // If nothing has touched the wheel recently, follow whatever moved the
-    // camera instead (pinch zoom, pointOfView flights, control resets).
-    if (performance.now() - lastWheelAt > 600) {
-      zoomTargetDist = cur;
-    } else if (Math.abs(zoomTargetDist - cur) > 0.01) {
-      const next = cur + (zoomTargetDist - cur) * zoomGlide;
-      cam.position.multiplyScalar(next / cur);
-    }
-    updateMarkerScale(cur);
-    requestAnimationFrame(smoothZoomLoop);
-  })();
-
   // ---------------------------------------------------------------
   // City marker zoom scaling
   // ---------------------------------------------------------------
@@ -408,6 +393,7 @@
   //   0.0  -> constant world size (pure zoom-grows behavior)
   // Values in between partially compensate for zoom. MARKER_MIN_SCALE floors
   // the result so markers never disappear when fully zoomed in.
+  // Declared BEFORE the frame loop below, which calls updateMarkerScale().
   const MARKER_BASE_SCALE = 5.5;  // sprite scale at the default framing
   const MARKER_REF_DIST = 320;    // camera distance at default framing (altitude 2.2)
   const MARKER_ZOOM_EXPONENT = 0.6; // <-- tune this: 0 = grows fully, 1 = constant size
@@ -423,6 +409,21 @@
       if (sprite) sprite.scale.set(s, s, 1);
     }
   }
+
+  (function smoothZoomLoop() {
+    const cam = world.camera();
+    const cur = cam.position.length();
+    // If nothing has touched the wheel recently, follow whatever moved the
+    // camera instead (pinch zoom, pointOfView flights, control resets).
+    if (performance.now() - lastWheelAt > 600) {
+      zoomTargetDist = cur;
+    } else if (Math.abs(zoomTargetDist - cur) > 0.01) {
+      const next = cur + (zoomTargetDist - cur) * zoomGlide;
+      cam.position.multiplyScalar(next / cur);
+    }
+    updateMarkerScale(cur);
+    requestAnimationFrame(smoothZoomLoop);
+  })();
 
 
   // ---------------------------------------------------------------
