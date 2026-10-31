@@ -304,19 +304,51 @@
   // and prevent zooming all the way out past the default framing.
   // Tune ZOOM_IN_LIMIT / ZOOM_OUT_LIMIT (globe.gl camera-distance units,
   // where the globe radius is 100) if 10x10deg looks off on your data.
-  const controls = world.controls();
-  controls.minDistance = 130;   // stops zooming in tighter than roughly 10deg of arc
-  controls.maxDistance = 420;   // stops zooming out past the full-globe default
-  controls.enablePan = false;
+  // ZOOM_LIMITS:
+  const ZOOM_IN_LIMIT = 130;   // stops zooming in tighter than roughly 10deg of arc
+  const ZOOM_OUT_LIMIT = 420;  // stops zooming out past the full-globe default
 
-  // Smoother scrolling/rotation: inertial damping instead of motion stopping
-  // the instant the mouse/trackpad input stops. A lower dampingFactor glides
-  // longer (smoother), and a higher zoomSpeed makes wheel/pinch zoom
-  // noticeably faster on both desktop and mobile.
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.06;
-  controls.zoomSpeed = 2.3;
-  controls.rotateSpeed = 0.6;
+  // globe.gl may (re)create or reset its internal controls object at any
+  // time (e.g. on container resize), which silently discards custom speed
+  // and damping settings -- the camera then falls back to the slow default
+  // after the first wheel tick. Instead of configuring the controls object
+  // once, we keep the desired settings in one place and re-apply them to
+  // the CURRENT controls object every frame, so they stick no matter what
+  // globe.gl does internally.
+  // Smoothing: OrbitControls uses enableDamping/dampingFactor, while the
+  // older TrackballControls uses dynamicDampingFactor/staticMoving. Set
+  // whichever exists, so the glide works with either implementation.
+  const ctrlSettings = {
+    minDistance: ZOOM_IN_LIMIT,
+    maxDistance: ZOOM_OUT_LIMIT,
+    enablePan: false,
+    zoomSpeed: 2.3,
+    rotateSpeed: 0.6,
+    enableDamping: true,
+    dampingFactor: 0.06,
+    dynamicDampingFactor: 0.06,
+    staticMoving: false,
+  };
+  function applyCtrlSettings(c) {
+    c.minDistance = ctrlSettings.minDistance;
+    c.maxDistance = ctrlSettings.maxDistance;
+    c.enablePan = ctrlSettings.enablePan;
+    c.zoomSpeed = ctrlSettings.zoomSpeed;
+    c.rotateSpeed = ctrlSettings.rotateSpeed;
+    if ('enableDamping' in c) {
+      c.enableDamping = ctrlSettings.enableDamping;
+      c.dampingFactor = ctrlSettings.dampingFactor;
+    }
+    if ('dynamicDampingFactor' in c) {
+      c.dynamicDampingFactor = ctrlSettings.dynamicDampingFactor;
+      c.staticMoving = ctrlSettings.staticMoving;
+    }
+  }
+  applyCtrlSettings(world.controls());
+  (function enforceCtrlSettings() {
+    applyCtrlSettings(world.controls());
+    requestAnimationFrame(enforceCtrlSettings);
+  })();
 
   world.pointOfView({ lat: 20, lng: 0, altitude: 2.2 }, 0);
 
@@ -327,20 +359,20 @@
   // ---------------------------------------------------------------
   // Zoom-speed test slider (live): tweak and read the value to pick a
   // final setting. Remove this block once you've settled on a number and
-  // hard-code it at `controls.zoomSpeed` above.
+  // hard-code it in `ctrlSettings.zoomSpeed` above.
   // ---------------------------------------------------------------
   const zoomSlider = document.createElement('div');
   zoomSlider.id = 'zoomSliderWrap';
   zoomSlider.innerHTML = `
     <label for="zoomSpeedSlider">Zoom speed</label>
-    <input type="range" id="zoomSpeedSlider" min="0.2" max="5" step="0.1" value="${controls.zoomSpeed}" />
-    <span id="zoomSpeedValue">${controls.zoomSpeed.toFixed(1)}</span>
+    <input type="range" id="zoomSpeedSlider" min="0.2" max="5" step="0.1" value="${ctrlSettings.zoomSpeed}" />
+    <span id="zoomSpeedValue">${ctrlSettings.zoomSpeed.toFixed(1)}</span>
   `;
   document.body.appendChild(zoomSlider);
   const zoomSpeedInput = zoomSlider.querySelector('#zoomSpeedSlider');
   const zoomSpeedValue = zoomSlider.querySelector('#zoomSpeedValue');
   zoomSpeedInput.addEventListener('input', () => {
-    controls.zoomSpeed = Number(zoomSpeedInput.value);
+    ctrlSettings.zoomSpeed = Number(zoomSpeedInput.value);
     zoomSpeedValue.textContent = Number(zoomSpeedInput.value).toFixed(1);
   });
 
