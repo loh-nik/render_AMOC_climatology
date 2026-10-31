@@ -98,6 +98,16 @@
   .donutCenterValue{fill:var(--text);font-size:24px;font-weight:700;}
   .donutCenterPrec{fill:var(--muted);font-size:14px;}
   .seasonCaption{font-size:11px;color:var(--muted);text-align:center;margin-top:2px;}
+  /* Clickable/hoverable donut quadrants + their info box */
+  .seasonGroup{cursor:pointer;transition:transform .18s ease;}
+  #seasonInfoBox{
+    display:none;margin-top:8px;padding:9px 12px;border-radius:10px;
+    background:rgba(95,180,255,0.08);border:1px solid var(--panel-border);
+    font-size:12px;color:var(--text);text-align:center;
+  }
+  #seasonInfoBox.visible{display:block;}
+  #seasonInfoBox .infoTitle{font-weight:600;margin-bottom:3px;}
+  #seasonInfoBox .infoLine{color:var(--muted);font-variant-numeric:tabular-nums;}
   .precNote{font-size:11px;color:var(--muted);text-align:center;margin-top:6px;font-style:italic;}
   #fullDataToggle{display:block;width:100%;text-align:center;margin:16px 0 4px;
     background:rgba(95,180,255,0.08);border:1px solid var(--panel-border);color:var(--text);
@@ -694,8 +704,42 @@
     return { tas, precPct };
   }
 
+  // Same seasonal statistics, but kept per model (not averaged), so the
+  // donut quadrants can show the across-model range on hover/click.
+  function modelPeriodStats(cd, monthIdxs) {
+    const models = cd.models || [];
+    return models.map(model => {
+      const anomaly = cd.anomaly && cd.anomaly[model];
+      const intact = cd.climatology && cd.climatology[`${model}|${cd.scenarios[0]}`];
+      const tasVals = [], precAnomVals = [], precIntactVals = [];
+      monthIdxs.forEach(mi => {
+        if (anomaly && anomaly.tas) tasVals.push(anomaly.tas[mi]);
+        if (anomaly && anomaly.prec) precAnomVals.push(anomaly.prec[mi]);
+        if (intact && intact.prec) precIntactVals.push(intact.prec[mi]);
+      });
+      const tas = tasVals.length ? avg(tasVals) : null;
+      let precPct = null;
+      if (precAnomVals.length && precIntactVals.length) {
+        const meanIntact = avg(precIntactVals);
+        precPct = meanIntact ? (avg(precAnomVals) / meanIntact) * 100 : null;
+      }
+      return { tas, precPct };
+    });
+  }
+  function rangeOf(vals) {
+    const finite = vals.filter(v => v != null && Number.isFinite(v));
+    if (!finite.length) return null;
+    return { min: Math.min.apply(null, finite), max: Math.max.apply(null, finite) };
+  }
+
   function computeSummary(cd) {
-    const seasons = SEASONS.map(s => Object.assign({}, s, periodStats(cd, s.months)));
+    const seasons = SEASONS.map(s => {
+      const perModel = modelPeriodStats(cd, s.months);
+      return Object.assign({}, s, periodStats(cd, s.months), {
+        tasRange: rangeOf(perModel.map(m => m.tas)),
+        precRange: rangeOf(perModel.map(m => m.precPct)),
+      });
+    });
     const annual = periodStats(cd, ALL_MONTHS);
     return { seasons, annual };
   }
@@ -738,24 +782,129 @@
     const parts = [];
     summary.seasons.forEach((s, i) => {
       const start = i * 90, end = start + 90;
-      parts.push(`<path d="${annularSectorPath(cx, cy, rOuter, rInner, start, end)}" fill="${segmentColor(s.tas)}" stroke="#04070d" stroke-width="2"/>`);
+      // Each quadrant is a <g class="seasonGroup"> so the whole quadrant,
+      // INCLUDING its text labels, is clickable (mobile). Hover on desktop
+      // is bound to the colored sector path only (see attachSeasonInfo).
+      const group = [];
+      group.push(`<path class="seasonSector" d="${annularSectorPath(cx, cy, rOuter, rInner, start, end)}" fill="${segmentColor(s.tas)}" stroke="#04070d" stroke-width="2"/>`);
       const mid = start + 45;
       const p = polarPoint(cx, cy, labelR, mid);
       // Emoji inside the colored annular segment (between inner and outer
       // radius), not next to the season name.
       const seg = polarPoint(cx, cy, (rInner + rOuter) / 2, mid);
       const icon = s.tas == null ? '' : (s.tas < 0 ? '\u2744' : '\u2600');
-      if (icon) parts.push(`<text x="${seg.x}" y="${seg.y}" dy="6" text-anchor="middle" class="donutIcon">${icon}</text>`);
+      if (icon) group.push(`<text x="${seg.x}" y="${seg.y}" dy="6" text-anchor="middle" class="donutIcon">${icon}</text>`);
       const precText = hasPrec ? fmtPrec(s.precPct) : null;
-      parts.push(`<text x="${p.x}" y="${p.y - 8}" text-anchor="middle" class="donutLabel">${s.label}</text>`);
-      parts.push(`<text x="${p.x}" y="${p.y + 12}" text-anchor="middle" class="donutValue">${fmtTas(s.tas)}</text>`);
-      if (precText) parts.push(`<text x="${p.x}" y="${p.y + 30}" text-anchor="middle" class="donutPrec">${precText}</text>`);
+      group.push(`<text x="${p.x}" y="${p.y - 8}" text-anchor="middle" class="donutLabel">${s.label}</text>`);
+      group.push(`<text x="${p.x}" y="${p.y + 12}" text-anchor="middle" class="donutValue">${fmtTas(s.tas)}</text>`);
+      if (precText) group.push(`<text x="${p.x}" y="${p.y + 30}" text-anchor="middle" class="donutPrec">${precText}</text>`);
+      parts.push(`<g class="seasonGroup" data-season-index="${i}">${group.join('')}</g>`);
     });
     const annualPrec = hasPrec ? fmtPrec(summary.annual.precPct) : null;
     parts.push(`<text x="${cx}" y="${cy - 10}" text-anchor="middle" class="donutCenterLabel">ANNUAL AVG</text>`);
     parts.push(`<text x="${cx}" y="${cy + 12}" text-anchor="middle" class="donutCenterValue">${fmtTas(summary.annual.tas)}</text>`);
     if (annualPrec) parts.push(`<text x="${cx}" y="${cy + 30}" text-anchor="middle" class="donutCenterPrec">${annualPrec}</text>`);
     return `<svg viewBox="0 0 260 260" class="donutSvg">${parts.join('')}</svg>`;
+  }
+
+  // ---------------------------------------------------------------
+  // Season info box: shows the across-model range of the seasonal mean
+  // temperature anomaly and precipitation anomaly for one quadrant.
+  // Desktop: hover over the colored quadrant area. Mobile: tap anywhere in
+  // the quadrant incl. its text labels; tap again (or elsewhere in the
+  // panel) to dismiss.
+  // ---------------------------------------------------------------
+  function fmtSigned(v, digits) {
+    if (v == null || !Number.isFinite(v)) return '\u2013';
+    return (v > 0 ? '+' : v < 0 ? '\u2212' : '') + Math.abs(v).toFixed(digits);
+  }
+  function seasonInfoHtml(s, hasPrec) {
+    const lines = [`<div class="infoTitle">${s.label} (${s.range}) \u00b7 model range</div>`];
+    lines.push(`<div class="infoLine">temp range: [${fmtSigned(s.tasRange && s.tasRange.min, 1)}, ${fmtSigned(s.tasRange && s.tasRange.max, 1)}] \u00b0C</div>`);
+    if (hasPrec) {
+      lines.push(`<div class="infoLine">prec range: [${fmtSigned(s.precRange && s.precRange.min, 0)}%, ${fmtSigned(s.precRange && s.precRange.max, 0)}%]</div>`);
+    }
+    return lines.join('');
+  }
+
+  function attachSeasonInfo(svg, summary, hasPrec) {
+    if (!svg) return;
+    const box = document.getElementById('seasonInfoBox');
+    if (!box) return;
+    let lockedIndex = null; // non-null while a click-opened box is showing
+    let poppedIndex = null; // quadrant currently sticking out of the donut
+    const POP_DIST = 6;     // how far (svg units) a quadrant sticks out
+
+    const groups = svg.querySelectorAll('.seasonGroup');
+    // Pop the quadrant outward along its mid-angle so it looks like it
+    // slides out of the donut ring. i=0 is at the top-right, so:
+    //   0 -> up-right, 1 -> down-right, 2 -> down-left, 3 -> up-left
+    function popVector(i) {
+      const a = (i * 90 + 45 - 90) * Math.PI / 180;
+      return { dx: Math.cos(a) * POP_DIST, dy: Math.sin(a) * POP_DIST };
+    }
+    function setPop(i) {
+      if (poppedIndex === i) return;
+      groups.forEach(g => {
+        const idx = Number(g.dataset.seasonIndex);
+        if (idx === i) {
+          const { dx, dy } = popVector(idx);
+          g.style.transform = `translate(${dx}px, ${dy}px)`;
+        } else {
+          g.style.transform = '';
+        }
+      });
+      poppedIndex = i;
+    }
+    function show(i) {
+      box.innerHTML = seasonInfoHtml(summary.seasons[i], hasPrec);
+      box.classList.add('visible');
+      setPop(i);
+    }
+    function hide() {
+      box.classList.remove('visible');
+    }
+    groups.forEach(g => {
+      const idx = Number(g.dataset.seasonIndex);
+      // Desktop: hover only over the colored quadrant, not the text labels.
+      g.querySelector('.seasonSector').addEventListener('mouseenter', () => {
+        if (lockedIndex == null) show(idx);
+        else setPop(idx); // already locked: just pop the hovered quadrant
+      });
+      // Desktop: leaving the colored quadrant pops back to the locked one.
+      g.querySelector('.seasonSector').addEventListener('mouseleave', () => {
+        if (lockedIndex == null) setPop(null);
+        else setPop(lockedIndex);
+      });
+      // Mobile / click: anywhere in the quadrant incl. the text labels.
+      g.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (lockedIndex === idx && box.classList.contains('visible')) {
+          lockedIndex = null;
+          hide();
+          setPop(null);
+        } else {
+          lockedIndex = idx;
+          show(idx);
+        }
+      });
+    });
+    // Hover box disappears when the pointer leaves the donut -- but only
+    // if it was not opened (locked) by a click/tap.
+    svg.addEventListener('mouseleave', () => {
+      if (lockedIndex == null) {
+        hide();
+        setPop(null);
+      }
+    });
+    // Clicking anywhere else in the panel dismisses a tapped-open box.
+    document.getElementById('panelBody').addEventListener('click', () => {
+      if (lockedIndex != null) {
+        lockedIndex = null;
+        hide();
+        setPop(null);
+      }
+    });
   }
 
   // ---------------------------------------------------------------
@@ -894,6 +1043,7 @@
       <div class="donutWrap">
         ${buildDonutSVG(summary, hasPrec)}
         <div class="seasonCaption">${captionText}</div>
+        <div id="seasonInfoBox" aria-live="polite"></div>
         ${hasPrec ? '' : '<div class="precNote">Precipitation data not available yet</div>'}
       </div>
       <button id="fullDataToggle" class="viewBtn" type="button">${fullDataOpen ? 'Hide full data \u25b4' : 'Show full data \u25be'}</button>
@@ -917,6 +1067,7 @@
     models.forEach((model, i) => {
       renderModelClimatology(document.getElementById(`c-clim-${i}`), cd, model);
     });
+    attachSeasonInfo(document.querySelector('#panelBody .donutSvg'), summary, hasPrec);
 
     const toggleBtn = document.getElementById('fullDataToggle');
     const section = document.getElementById('fullDataSection');
