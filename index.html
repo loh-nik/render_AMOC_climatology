@@ -50,7 +50,7 @@
   }
   #panel.open{transform:translateX(0);}
   #panel.fullscreen{width:100vw;max-width:none;}
-  #panel.fullscreen .chartBlock canvas{height:500px !important;}
+  #panel.fullscreen .chartBlock .chartWrap{height:500px;}
   @media (max-width:720px){
     #panel{width:100vw;}
   }
@@ -69,17 +69,24 @@
   .chartBlock{margin-top:22px;}
   .chartBlock h3{font-size:13px;font-weight:600;margin:0 0 2px;color:var(--text);}
   .chartBlock p.sub{font-size:11px;color:var(--muted);margin:0 0 8px;}
-  .chartBlock canvas{width:100% !important;height:340px !important;}
+  /* Chart.js (responsive + maintainAspectRatio:false) sizes the canvas to
+     its parent. Give it a dedicated, fixed-height wrapper and let Chart.js
+     own the canvas size: forcing CSS width/height on the canvas itself
+     desynchronizes the CSS size from the internal render size, which is
+     what made hover/click hit-testing land several pixels off. */
+  .chartWrap{position:relative;height:340px;}
+  .chartBlock canvas{display:block;}
 
   /* ---- donut summary ---- */
   .donutWrap{display:flex;flex-direction:column;align-items:center;margin-bottom:4px;}
   .donutSvg{width:100%;max-width:280px;height:auto;display:block;}
   .donutLabel{fill:var(--text);font-size:11px;font-weight:600;}
-  .donutValue{fill:var(--text);font-size:20px;font-weight:700;letter-spacing:0.02em;}
-  .donutPrec{fill:var(--muted);font-size:12px;}
-  .donutCenterLabel{fill:var(--muted);font-size:10px;letter-spacing:.04em;}
-  .donutCenterValue{fill:var(--text);font-size:24px;font-weight:700;letter-spacing:0.02em;}
-  .donutCenterPrec{fill:var(--muted);font-size:13px;}
+  .donutIcon{font-size:17px;}
+  .donutValue{fill:var(--text);font-size:19px;font-weight:700;}
+  .donutPrec{fill:var(--muted);font-size:13px;}
+  .donutCenterLabel{fill:var(--muted);font-size:9px;letter-spacing:.04em;}
+  .donutCenterValue{fill:var(--text);font-size:24px;font-weight:700;}
+  .donutCenterPrec{fill:var(--muted);font-size:14px;}
   .seasonCaption{font-size:11px;color:var(--muted);text-align:center;margin-top:2px;}
   .precNote{font-size:11px;color:var(--muted);text-align:center;margin-top:6px;font-style:italic;}
   #fullDataToggle{display:block;width:100%;text-align:center;margin:16px 0 4px;
@@ -90,14 +97,6 @@
 
   #emptyState{display:flex;height:100%;align-items:center;justify-content:center;
     color:var(--muted);font-size:13px;text-align:center;padding:40px;}
-  
-  /* ---- Improved cursor interaction ---- */
-  .chartBlock canvas {
-    cursor: pointer;
-  }
-  .chartBlock canvas:hover {
-    cursor: pointer;
-  }
 </style>
 </head>
 <body>
@@ -492,6 +491,7 @@
     requestAnimationFrame(() => liveCharts.forEach(c => c.resize()));
   });
 
+
   let liveCharts = [];
   function destroyCharts() { liveCharts.forEach(c => c.destroy()); liveCharts = []; }
 
@@ -606,34 +606,23 @@
     const parts = [];
     summary.seasons.forEach((s, i) => {
       const start = i * 90, end = start + 90;
-      const mid = start + 45;
-      const p = polarPoint(cx, cy, (rInner + rOuter) / 2, mid);
-      
-      // Determine emoji based on temperature anomaly
-      const icon = s.tas == null ? '' : (s.tas < 0 ? '\u2744' : '\u2600');
-      
-      // Add the sector path
       parts.push(`<path d="${annularSectorPath(cx, cy, rOuter, rInner, start, end)}" fill="${segmentColor(s.tas)}" stroke="#04070d" stroke-width="2"/>`);
-      
-      // Add the emoji centered in the sector
-      parts.push(`<text x="${p.x}" y="${p.y}" text-anchor="middle" font-size="24" dominant-baseline="middle" fill="white">${icon}</text>`);
-      
-      // Add the temperature value
-      parts.push(`<text x="${p.x}" y="${p.y + 20}" text-anchor="middle" class="donutValue">${fmtTas(s.tas)}</text>`);
-      
-      // Add precipitation if available
-      if (hasPrec && s.precPct != null) {
-        const precText = fmtPrec(s.precPct);
-        parts.push(`<text x="${p.x}" y="${p.y + 40}" text-anchor="middle" class="donutPrec">${precText}</text>`);
-      }
+      const mid = start + 45;
+      const p = polarPoint(cx, cy, labelR, mid);
+      // Emoji inside the colored annular segment (between inner and outer
+      // radius), not next to the season name.
+      const seg = polarPoint(cx, cy, (rInner + rOuter) / 2, mid);
+      const icon = s.tas == null ? '' : (s.tas < 0 ? '\u2744' : '\u2600');
+      if (icon) parts.push(`<text x="${seg.x}" y="${seg.y}" dy="6" text-anchor="middle" class="donutIcon">${icon}</text>`);
+      const precText = hasPrec ? fmtPrec(s.precPct) : null;
+      parts.push(`<text x="${p.x}" y="${p.y - 8}" text-anchor="middle" class="donutLabel">${s.label}</text>`);
+      parts.push(`<text x="${p.x}" y="${p.y + 12}" text-anchor="middle" class="donutValue">${fmtTas(s.tas)}</text>`);
+      if (precText) parts.push(`<text x="${p.x}" y="${p.y + 30}" text-anchor="middle" class="donutPrec">${precText}</text>`);
     });
-    
-    // Add annual average in the center
     const annualPrec = hasPrec ? fmtPrec(summary.annual.precPct) : null;
     parts.push(`<text x="${cx}" y="${cy - 10}" text-anchor="middle" class="donutCenterLabel">ANNUAL AVG</text>`);
     parts.push(`<text x="${cx}" y="${cy + 12}" text-anchor="middle" class="donutCenterValue">${fmtTas(summary.annual.tas)}</text>`);
     if (annualPrec) parts.push(`<text x="${cx}" y="${cy + 30}" text-anchor="middle" class="donutCenterPrec">${annualPrec}</text>`);
-    
     return `<svg viewBox="0 0 260 260" class="donutSvg">${parts.join('')}</svg>`;
   }
 
@@ -745,13 +734,13 @@
         <div class="chartBlock">
           <h3>Monthly tas anomaly &mdash; all models</h3>
           <p class="sub">Collapsed minus Intact, by month</p>
-          <canvas id="c-anom-all"></canvas>
+          <div class="chartWrap"><canvas id="c-anom-all"></canvas></div>
         </div>
         ${models.map((model, i) => `
           <div class="chartBlock">
             <h3>Climatology &mdash; ${model}</h3>
             <p class="sub">Temperature (line, left axis) and precipitation (bars, right axis), Intact vs Collapsed</p>
-            <canvas id="c-clim-${i}"></canvas>
+            <div class="chartWrap"><canvas id="c-clim-${i}"></canvas></div>
           </div>
         `).join('')}
       </div>
