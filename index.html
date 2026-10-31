@@ -57,6 +57,12 @@
   #panel.fullscreen .donutSvg{max-width:560px;}
   @media (max-width:720px){
     #panel{width:100vw;}
+    /* Panel already covers the whole screen on mobile, so fullscreen mode
+       makes no difference there: hide the button. */
+    #fullscreenBtn{display:none;}
+    /* Donut scale halfway between the desktop normal (280px) and
+       desktop fullscreen (560px) settings. */
+    .donutSvg{max-width:420px;}
   }
   #panelHeader{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}
   #panelTitle{font-size:20px;font-weight:600;}
@@ -722,6 +728,36 @@
   // ---------------------------------------------------------------
   // Full-data charts
   // ---------------------------------------------------------------
+  // Floating "delta" bars ([Intact, Collapsed] pairs) mis-report their
+  // hit-test geometry to Chart.js: the hover/hit region extends far past
+  // the drawn bar (mostly downwards), so the delta bar swallows the cursor
+  // even when it visually sits over the solid Intact bar. This plugin
+  // re-anchors each floating bar's hit geometry to its true pixel span
+  // after every update, so hover behaves exactly like the drawn rectangle.
+  const clampFloatingBarHit = {
+    id: 'clampFloatingBarHit',
+    afterDatasetsUpdate(chart) {
+      chart.data.datasets.forEach((ds, di) => {
+        if (!ds.isDeltaBars) return;
+        const meta = chart.getDatasetMeta(di);
+        if (!meta || !chart.scales) return;
+        const scale = chart.scales[ds.yAxisID || 'y'];
+        if (!scale) return;
+        meta.data.forEach((el, j) => {
+          const raw = ds.data[j];
+          if (!Array.isArray(raw) || !el) return;
+          const a = scale.getPixelForValue(raw[0]);
+          const b = scale.getPixelForValue(raw[1]);
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return;
+          const top = Math.min(a, b), bottom = Math.max(a, b);
+          el.base = top;
+          el.y = bottom;
+          el.height = bottom - top;
+        });
+      });
+    }
+  };
+
   function renderAnomalyAll(canvas, cd) {
     const models = cd.models || [];
     const datasets = models.map((model, i) => ({
@@ -773,6 +809,7 @@
       });
       datasets.push({
         type: 'bar', label: `${scenarios[1]} precip (Δ)`, yAxisID: 'y1', order: 2,
+        isDeltaBars: true,
         data: intact.prec.map((v0, i) => [v0, collapsed.prec[i]]),
         backgroundColor: intact.prec.map((v0, i) => collapsed.prec[i] >= v0 ? 'rgba(139,209,124,0.5)' : 'rgba(255,107,107,0.5)'),
         borderWidth: 0, grouped: false, barPercentage: 0.6, categoryPercentage: 0.8,
@@ -782,7 +819,11 @@
     const chart = new Chart(canvas, {
       type: 'bar',
       data: { labels: cd.months, datasets },
+      plugins: [clampFloatingBarHit],
       options: baseChartOptions({
+        // Show every series for the hovered month rather than letting the
+        // single nearest (and for floating bars, mis-hit) element win.
+        interaction: { mode: 'index', intersect: false },
         scales: {
           x: { ticks: { color: '#8fa0bd', font: { size: 13 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
           y: { position: 'left',
