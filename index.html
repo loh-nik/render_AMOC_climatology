@@ -43,7 +43,7 @@
 
   /* ---- side / fullscreen panel ---- */
   #panel{
-    position:fixed;top:0;right:0;height:100%;width:50vw;max-width:100vw;
+    position:fixed;top:0;right:0;height:100%;width:40vw;min-width:340px;max-width:640px;
     background:var(--panel-bg);border-left:1px solid var(--panel-border);
     transform:translateX(100%);transition:transform .25s ease;
     overflow-y:auto;z-index:30;padding:18px 18px 40px;
@@ -51,6 +51,10 @@
   #panel.open{transform:translateX(0);}
   #panel.fullscreen{width:100vw;max-width:none;}
   #panel.fullscreen .chartBlock .chartWrap{height:500px;}
+  /* Fullscreen (PC): scale the whole donut plot up 2x. The SVG is viewBox-
+     based, so raising its max-width scales the graphic and all its text
+     proportionally. Mobile stays untouched. */
+  #panel.fullscreen .donutSvg{max-width:560px;}
   @media (max-width:720px){
     #panel{width:100vw;}
   }
@@ -80,8 +84,8 @@
   /* ---- donut summary ---- */
   .donutWrap{display:flex;flex-direction:column;align-items:center;margin-bottom:4px;}
   .donutSvg{width:100%;max-width:280px;height:auto;display:block;}
-  .donutLabel{fill:var(--text);font-size:11px;font-weight:600;}
-  .donutIcon{font-size:17px;}
+  .donutLabel{fill:var(--text);font-size:12.5px;font-weight:600;}
+  .donutIcon{font-size:26px;}
   .donutValue{fill:var(--text);font-size:19px;font-weight:700;}
   .donutPrec{fill:var(--muted);font-size:13px;}
   .donutCenterLabel{fill:var(--muted);font-size:9px;letter-spacing:.04em;}
@@ -602,7 +606,7 @@
   }
 
   function buildDonutSVG(summary, hasPrec) {
-    const cx = 130, cy = 130, rOuter = 88, rInner = 54, labelR = 122;
+    const cx = 130, cy = 130, rOuter = 88, rInner = 54, labelR = 132;
     const parts = [];
     summary.seasons.forEach((s, i) => {
       const start = i * 90, end = start + 90;
