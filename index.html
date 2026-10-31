@@ -71,8 +71,8 @@
   #panelActions{display:flex;gap:8px;align-items:center;flex:none;}
 
   .chartBlock{margin-top:22px;}
-  .chartBlock h3{font-size:13px;font-weight:600;margin:0 0 2px;color:var(--text);}
-  .chartBlock p.sub{font-size:11px;color:var(--muted);margin:0 0 8px;}
+  .chartBlock h3{font-size:15px;font-weight:600;margin:0 0 2px;color:var(--text);}
+  .chartBlock p.sub{font-size:12.5px;color:var(--muted);margin:0 0 8px;}
   /* Chart.js (responsive + maintainAspectRatio:false) sizes the canvas to
      its parent. Give it a dedicated, fixed-height wrapper and let Chart.js
      own the canvas size: forcing CSS width/height on the canvas itself
@@ -516,12 +516,27 @@
       animation: false,
       interaction: { mode: 'nearest', intersect: false },
       plugins: {
-        legend: { labels: { color: '#c7d2e6', boxWidth: 12, font: { size: 10 } } },
-        tooltip: { titleFont: { size: 11 }, bodyFont: { size: 11 } },
+        legend: { labels: { color: '#c7d2e6', boxWidth: 16, font: { size: 13 } } },
+        tooltip: {
+          titleFont: { size: 13 }, bodyFont: { size: 13 },
+          callbacks: {
+            // Floating precip-delta bars carry [Intact, Collapsed] pairs;
+            // render the signed difference instead of the raw array.
+            label: (ctx) => {
+              if (Array.isArray(ctx.raw) && ctx.raw.length === 2) {
+                const [from, to] = ctx.raw;
+                const d = to - from;
+                const sign = d >= 0 ? '+' : '\u2212';
+                return ` ${ctx.dataset.label}: ${sign}${Math.abs(d).toFixed(2)} mm/day (${d >= 0 ? 'wetter' : 'drier'})`;
+              }
+              return ` ${ctx.dataset.label}: ${ctx.formattedValue}`;
+            }
+          }
+        },
       },
       scales: {
-        x: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
-        y: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        x: { ticks: { color: '#8fa0bd', font: { size: 13 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+        y: { ticks: { color: '#8fa0bd', font: { size: 13 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
       },
     }, extra || {});
   }
@@ -645,9 +660,9 @@
       data: { labels: cd.months, datasets },
       options: baseChartOptions({
         scales: {
-          y: { title: { display: true, text: 'Δ tas (°C), Collapsed − Intact', color: '#8fa0bd', font: { size: 10 } },
-            ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.08)' } },
-          x: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          y: { title: { display: true, text: 'Δ tas (°C), Collapsed − Intact', color: '#8fa0bd', font: { size: 13 } },
+            ticks: { color: '#8fa0bd', font: { size: 13 } }, grid: { color: 'rgba(255,255,255,0.08)' } },
+          x: { ticks: { color: '#8fa0bd', font: { size: 13 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
         }
       }),
     });
@@ -695,13 +710,13 @@
       data: { labels: cd.months, datasets },
       options: baseChartOptions({
         scales: {
-          x: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          x: { ticks: { color: '#8fa0bd', font: { size: 13 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
           y: { position: 'left',
-            title: { display: true, text: 'Temperature (°C)', color: '#8fa0bd', font: { size: 10 } },
-            ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+            title: { display: true, text: 'Temperature (°C)', color: '#8fa0bd', font: { size: 13 } },
+            ticks: { color: '#8fa0bd', font: { size: 13 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
           y1: { position: 'right', display: hasPrec,
-            title: { display: true, text: 'Precip (mm/day)', color: '#8fa0bd', font: { size: 10 } },
-            ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { drawOnChartArea: false } },
+            title: { display: true, text: 'Precip (mm/day)', color: '#8fa0bd', font: { size: 13 } },
+            ticks: { color: '#8fa0bd', font: { size: 13 } }, grid: { drawOnChartArea: false } },
         }
       }),
     });
