@@ -390,8 +390,40 @@
       const next = cur + (zoomTargetDist - cur) * zoomGlide;
       cam.position.multiplyScalar(next / cur);
     }
+    updateMarkerScale(cur);
     requestAnimationFrame(smoothZoomLoop);
   })();
+
+  // ---------------------------------------------------------------
+  // City marker zoom scaling
+  // ---------------------------------------------------------------
+  // Sprites live in world space, so without help they grow on screen as you
+  // zoom in (eventually obnoxiously large). Each frame we rescale every
+  // marker with the camera distance d (globe radius = 100 units):
+  //
+  //   markerScale = MARKER_BASE_SCALE * (d / MARKER_REF_DIST) ^ MARKER_ZOOM_EXPONENT
+  //
+  // MARKER_ZOOM_EXPONENT encodes the scaling relationship:
+  //   1.0  -> constant apparent (screen) size at every zoom level
+  //   0.0  -> constant world size (pure zoom-grows behavior)
+  // Values in between partially compensate for zoom. MARKER_MIN_SCALE floors
+  // the result so markers never disappear when fully zoomed in.
+  const MARKER_BASE_SCALE = 5.5;  // sprite scale at the default framing
+  const MARKER_REF_DIST = 320;    // camera distance at default framing (altitude 2.2)
+  const MARKER_ZOOM_EXPONENT = 0.6; // <-- tune this: 0 = grows fully, 1 = constant size
+  const MARKER_MIN_SCALE = 2.2;   // floor for fully zoomed-in views
+
+  function updateMarkerScale(cameraDist) {
+    const s = Math.max(
+      MARKER_MIN_SCALE,
+      MARKER_BASE_SCALE * Math.pow(cameraDist / MARKER_REF_DIST, MARKER_ZOOM_EXPONENT)
+    );
+    for (const id in spriteByCity) {
+      const sprite = spriteByCity[id];
+      if (sprite) sprite.scale.set(s, s, 1);
+    }
+  }
+
 
   // ---------------------------------------------------------------
   // Satellite / heatmap views
