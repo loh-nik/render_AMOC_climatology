@@ -445,7 +445,7 @@
     const hm = heatmaps[index];
     validateHeatmapValues(hm.values, hm.label);
     if (!heatmapUrls.has(index)) {
-      heatmapUrls.set(index, buildHeatmapDataUrl({ values: hm.values, label: hm.label }));
+      heatmapUrls.set(index, buildHeatmapDataUrl({ values: hm.values, label: hm.label, lat: hm.lat, lon: hm.lon }));
     }
     world.globeImageUrl(heatmapUrls.get(index));
     showHeatmapLegend(hm);
