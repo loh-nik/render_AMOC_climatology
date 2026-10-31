@@ -75,11 +75,11 @@
   .donutWrap{display:flex;flex-direction:column;align-items:center;margin-bottom:4px;}
   .donutSvg{width:100%;max-width:280px;height:auto;display:block;}
   .donutLabel{fill:var(--text);font-size:11px;font-weight:600;}
-  .donutValue{fill:var(--text);font-size:14px;font-weight:700;}
-  .donutPrec{fill:var(--muted);font-size:10px;}
-  .donutCenterLabel{fill:var(--muted);font-size:9px;letter-spacing:.04em;}
-  .donutCenterValue{fill:var(--text);font-size:19px;font-weight:700;}
-  .donutCenterPrec{fill:var(--muted);font-size:11px;}
+  .donutValue{fill:var(--text);font-size:20px;font-weight:700;letter-spacing:0.02em;}
+  .donutPrec{fill:var(--muted);font-size:12px;}
+  .donutCenterLabel{fill:var(--muted);font-size:10px;letter-spacing:.04em;}
+  .donutCenterValue{fill:var(--text);font-size:24px;font-weight:700;letter-spacing:0.02em;}
+  .donutCenterPrec{fill:var(--muted);font-size:13px;}
   .seasonCaption{font-size:11px;color:var(--muted);text-align:center;margin-top:2px;}
   .precNote{font-size:11px;color:var(--muted);text-align:center;margin-top:6px;font-style:italic;}
   #fullDataToggle{display:block;width:100%;text-align:center;margin:16px 0 4px;
@@ -90,6 +90,14 @@
 
   #emptyState{display:flex;height:100%;align-items:center;justify-content:center;
     color:var(--muted);font-size:13px;text-align:center;padding:40px;}
+  
+  /* ---- Improved cursor interaction ---- */
+  .chartBlock canvas {
+    cursor: pointer;
+  }
+  .chartBlock canvas:hover {
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -484,7 +492,6 @@
     requestAnimationFrame(() => liveCharts.forEach(c => c.resize()));
   });
 
-
   let liveCharts = [];
   function destroyCharts() { liveCharts.forEach(c => c.destroy()); liveCharts = []; }
 
@@ -599,19 +606,34 @@
     const parts = [];
     summary.seasons.forEach((s, i) => {
       const start = i * 90, end = start + 90;
-      parts.push(`<path d="${annularSectorPath(cx, cy, rOuter, rInner, start, end)}" fill="${segmentColor(s.tas)}" stroke="#04070d" stroke-width="2"/>`);
       const mid = start + 45;
-      const p = polarPoint(cx, cy, labelR, mid);
+      const p = polarPoint(cx, cy, (rInner + rOuter) / 2, mid);
+      
+      // Determine emoji based on temperature anomaly
       const icon = s.tas == null ? '' : (s.tas < 0 ? '\u2744' : '\u2600');
-      const precText = hasPrec ? fmtPrec(s.precPct) : null;
-      parts.push(`<text x="${p.x}" y="${p.y - 6}" text-anchor="middle" class="donutLabel">${icon} ${s.label}</text>`);
-      parts.push(`<text x="${p.x}" y="${p.y + 10}" text-anchor="middle" class="donutValue">${fmtTas(s.tas)}</text>`);
-      if (precText) parts.push(`<text x="${p.x}" y="${p.y + 24}" text-anchor="middle" class="donutPrec">${precText}</text>`);
+      
+      // Add the sector path
+      parts.push(`<path d="${annularSectorPath(cx, cy, rOuter, rInner, start, end)}" fill="${segmentColor(s.tas)}" stroke="#04070d" stroke-width="2"/>`);
+      
+      // Add the emoji centered in the sector
+      parts.push(`<text x="${p.x}" y="${p.y}" text-anchor="middle" font-size="24" dominant-baseline="middle" fill="white">${icon}</text>`);
+      
+      // Add the temperature value
+      parts.push(`<text x="${p.x}" y="${p.y + 20}" text-anchor="middle" class="donutValue">${fmtTas(s.tas)}</text>`);
+      
+      // Add precipitation if available
+      if (hasPrec && s.precPct != null) {
+        const precText = fmtPrec(s.precPct);
+        parts.push(`<text x="${p.x}" y="${p.y + 40}" text-anchor="middle" class="donutPrec">${precText}</text>`);
+      }
     });
+    
+    // Add annual average in the center
     const annualPrec = hasPrec ? fmtPrec(summary.annual.precPct) : null;
     parts.push(`<text x="${cx}" y="${cy - 10}" text-anchor="middle" class="donutCenterLabel">ANNUAL AVG</text>`);
     parts.push(`<text x="${cx}" y="${cy + 12}" text-anchor="middle" class="donutCenterValue">${fmtTas(summary.annual.tas)}</text>`);
     if (annualPrec) parts.push(`<text x="${cx}" y="${cy + 30}" text-anchor="middle" class="donutCenterPrec">${annualPrec}</text>`);
+    
     return `<svg viewBox="0 0 260 260" class="donutSvg">${parts.join('')}</svg>`;
   }
 
