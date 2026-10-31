@@ -29,6 +29,16 @@
   #toggleBtn:hover{border-color:var(--accent);}
   #toggleBtn .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);}
   #legendNote{font-size:11px;color:var(--muted);background:rgba(11,18,32,0.7);padding:6px 10px;border-radius:12px;}
+  #zoomSliderWrap{
+    position:fixed;bottom:14px;left:14px;z-index:20;
+    display:flex;align-items:center;gap:10px;
+    background:rgba(11,18,32,0.88);border:1px solid var(--panel-border);
+    padding:9px 14px;border-radius:20px;backdrop-filter:blur(6px);
+    font-size:12px;color:var(--muted);
+  }
+  #zoomSliderWrap label{cursor:pointer;}
+  #zoomSliderWrap input[type=range]{width:160px;accent-color:var(--accent);cursor:pointer;}
+  #zoomSpeedValue{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums;min-width:28px;text-align:right;}
   #heatLegend{
     display:none;min-width:240px;max-width:360px;padding:8px 10px;border-radius:12px;
     background:rgba(11,18,32,0.88);border:1px solid var(--panel-border);
@@ -315,65 +325,25 @@
   });
 
   // ---------------------------------------------------------------
-  // Progressive globe detail: when the user zooms in close, swap in a
-  // high-res Earth texture (8192x4096 equirectangular Blue Marble) by
-  // replacing the material's map directly -- globe.gl keeps its geometry,
-  // bump map and lighting, so nothing re-mounts or flashes. The hi-res
-  // texture is loaded lazily ONCE, cached in `hiResTex`, and never fetched
-  // again; the original texture is kept in `loResTex` for the zoom-out
-  // swap. Hysteresis (separate IN/OUT distances) plus "only apply once the
-  // texture has fully loaded" prevent flicker/jumping at the threshold.
+  // Zoom-speed test slider (live): tweak and read the value to pick a
+  // final setting. Remove this block once you've settled on a number and
+  // hard-code it at `controls.zoomSpeed` above.
   // ---------------------------------------------------------------
-  const HIRES_URL = 'https://raw.githubusercontent.com/charlespina/webgl-shaders/master/public/textures/2_no_clouds_8k.jpg';
-  const HIRES_IN_DIST = 170;   // camera distance below this -> want hi-res
-  const HIRES_OUT_DIST = 210;  // camera distance above this -> back to lo-res
-  let hiResTex = null;          // cached high-res THREE.Texture
-  let hiResLoading = false;
-  let hiResApplied = false;
-  let loResTex = null;          // the default globe texture, captured once
+  const zoomSlider = document.createElement('div');
+  zoomSlider.id = 'zoomSliderWrap';
+  zoomSlider.innerHTML = `
+    <label for="zoomSpeedSlider">Zoom speed</label>
+    <input type="range" id="zoomSpeedSlider" min="0.2" max="5" step="0.1" value="${controls.zoomSpeed}" />
+    <span id="zoomSpeedValue">${controls.zoomSpeed.toFixed(1)}</span>
+  `;
+  document.body.appendChild(zoomSlider);
+  const zoomSpeedInput = zoomSlider.querySelector('#zoomSpeedSlider');
+  const zoomSpeedValue = zoomSlider.querySelector('#zoomSpeedValue');
+  zoomSpeedInput.addEventListener('input', () => {
+    controls.zoomSpeed = Number(zoomSpeedInput.value);
+    zoomSpeedValue.textContent = Number(zoomSpeedInput.value).toFixed(1);
+  });
 
-  function ensureHiRes() {
-    if (hiResTex || hiResLoading) return;
-    hiResLoading = true;
-    new THREE.TextureLoader().load(HIRES_URL, tex => {
-      tex.anisotropy = 4; // crisp texture at oblique viewing angles
-      hiResTex = tex;
-    });
-  }
-
-  function applyGlobeTex(tex) {
-    const mat = world.globeMaterial();
-    if (!mat || !mat.map) return false;
-    if (mat.map === tex) return true;
-    mat.map = tex;
-    mat.needsUpdate = true;
-    return true;
-  }
-
-  // Checked every frame (cheap: a couple of comparisons once settled), so it
-  // also catches texture swaps from view changes without needing camera
-  // events. Started via requestAnimationFrame (not invoked directly) so the
-  // first check happens after the rest of the script has initialized.
-  function watchZoom() {
-    if (activeView === 'satellite') {
-      const mat = world.globeMaterial();
-      // If the map changed underneath us (e.g. returning from a heatmap
-      // view re-set the satellite texture), re-sync the applied flag.
-      if (hiResApplied && mat && mat.map !== hiResTex) hiResApplied = false;
-      if (mat && mat.map && mat.map !== hiResTex) loResTex = mat.map;
-      if (loResTex) {
-        const d = world.camera().position.length();
-        if (d < HIRES_IN_DIST) {
-          ensureHiRes(); // start loading well before it's needed
-          if (hiResTex && !hiResApplied) hiResApplied = applyGlobeTex(hiResTex);
-        } else if (d > HIRES_OUT_DIST && hiResApplied) {
-          hiResApplied = !applyGlobeTex(loResTex);
-        }
-      }
-    }
-    requestAnimationFrame(watchZoom);
-  }
-  requestAnimationFrame(watchZoom);
 
   // ---------------------------------------------------------------
   // Satellite / heatmap views
