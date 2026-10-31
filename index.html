@@ -29,16 +29,6 @@
   #toggleBtn:hover{border-color:var(--accent);}
   #toggleBtn .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);}
   #legendNote{font-size:11px;color:var(--muted);background:rgba(11,18,32,0.7);padding:6px 10px;border-radius:12px;}
-  #zoomSliderWrap{
-    position:fixed;bottom:14px;left:14px;z-index:20;
-    display:flex;align-items:center;gap:10px;
-    background:rgba(11,18,32,0.88);border:1px solid var(--panel-border);
-    padding:9px 14px;border-radius:20px;backdrop-filter:blur(6px);
-    font-size:12px;color:var(--muted);
-  }
-  #zoomSliderWrap label{cursor:pointer;}
-  #zoomSliderWrap input[type=range]{width:160px;accent-color:var(--accent);cursor:pointer;}
-  #zoomSpeedValue{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums;min-width:28px;text-align:right;}
   #heatLegend{
     display:none;min-width:240px;max-width:360px;padding:8px 10px;border-radius:12px;
     background:rgba(11,18,32,0.88);border:1px solid var(--panel-border);
@@ -322,10 +312,9 @@
     minDistance: ZOOM_IN_LIMIT,
     maxDistance: ZOOM_OUT_LIMIT,
     enablePan: false,
-    zoomSpeed: 2.3,
-    rotateSpeed: 0.6,
+    zoomSpeed: 1.0,
     enableDamping: true,
-    dampingFactor: 0.06,
+    dampingFactor: 0.12,
     dynamicDampingFactor: 0.06,
     staticMoving: false,
   };
@@ -334,7 +323,6 @@
     c.maxDistance = ctrlSettings.maxDistance;
     c.enablePan = ctrlSettings.enablePan;
     c.zoomSpeed = ctrlSettings.zoomSpeed;
-    c.rotateSpeed = ctrlSettings.rotateSpeed;
     if ('enableDamping' in c) {
       c.enableDamping = ctrlSettings.enableDamping;
       c.dampingFactor = ctrlSettings.dampingFactor;
@@ -357,25 +345,47 @@
   });
 
   // ---------------------------------------------------------------
-  // Zoom-speed test slider (live): tweak and read the value to pick a
-  // final setting. Remove this block once you've settled on a number and
-  // hard-code it in `ctrlSettings.zoomSpeed` above.
+  // Smooth wheel zoom (PC)
   // ---------------------------------------------------------------
-  const zoomSlider = document.createElement('div');
-  zoomSlider.id = 'zoomSliderWrap';
-  zoomSlider.innerHTML = `
-    <label for="zoomSpeedSlider">Zoom speed</label>
-    <input type="range" id="zoomSpeedSlider" min="0.2" max="5" step="0.1" value="${ctrlSettings.zoomSpeed}" />
-    <span id="zoomSpeedValue">${ctrlSettings.zoomSpeed.toFixed(1)}</span>
-  `;
-  document.body.appendChild(zoomSlider);
-  const zoomSpeedInput = zoomSlider.querySelector('#zoomSpeedSlider');
-  const zoomSpeedValue = zoomSlider.querySelector('#zoomSpeedValue');
-  zoomSpeedInput.addEventListener('input', () => {
-    ctrlSettings.zoomSpeed = Number(zoomSpeedInput.value);
-    zoomSpeedValue.textContent = Number(zoomSpeedInput.value).toFixed(1);
-  });
+  // OrbitControls applies each wheel tick as an instant, discrete dolly,
+  // so fast scrolling looks step-step. Here we intercept the wheel events
+  // (capture phase, before OrbitControls sees them) and instead animate
+  // the camera distance toward a target with an exponential glide, in the
+  // same style as the rotation damping. Touch/pinch is untouched: OrbitControls
+  // still handles it, and any externally changed distance (pinch, programmatic
+  // pointOfView) is picked up again as the new baseline after a short idle.
+  const zoomGlide = 0.14;           // fraction of remaining distance per frame
+  const wheelSensitivity = 0.0012; // proportional step per pixel of deltaY
+  let zoomTargetDist = world.camera().position.length();
+  let lastWheelAt = 0;
 
+  document.getElementById('globeViz').addEventListener('wheel', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    lastWheelAt = performance.now();
+    // Normalize deltaMode "lines" (Firefox) to pixels.
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    // Multiplicative zoom: equal wheel ticks give equal *relative* steps,
+    // which also makes the limits below behave uniformly near/far.
+    zoomTargetDist = Math.max(
+      ctrlSettings.minDistance,
+      Math.min(ctrlSettings.maxDistance, zoomTargetDist * Math.exp(dy * wheelSensitivity))
+    );
+  }, { capture: true, passive: false });
+
+  (function smoothZoomLoop() {
+    const cam = world.camera();
+    const cur = cam.position.length();
+    // If nothing has touched the wheel recently, follow whatever moved the
+    // camera instead (pinch zoom, pointOfView flights, control resets).
+    if (performance.now() - lastWheelAt > 600) {
+      zoomTargetDist = cur;
+    } else if (Math.abs(zoomTargetDist - cur) > 0.01) {
+      const next = cur + (zoomTargetDist - cur) * zoomGlide;
+      cam.position.multiplyScalar(next / cur);
+    }
+    requestAnimationFrame(smoothZoomLoop);
+  })();
 
   // ---------------------------------------------------------------
   // Satellite / heatmap views
