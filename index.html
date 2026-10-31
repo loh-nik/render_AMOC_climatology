@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-<title>AMOC Collapse Climatology</title>
+<title>Climate Globe</title>
 
 <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
 <script src="https://unpkg.com/globe.gl@2.32.2/dist/globe.gl.min.js"></script>
@@ -300,11 +300,12 @@
   controls.enablePan = false;
 
   // Smoother scrolling/rotation: inertial damping instead of motion stopping
-  // the instant the mouse/trackpad input stops, plus gentler zoom/rotate
-  // speeds so wheel-scroll zoom doesn't feel jumpy.
+  // the instant the mouse/trackpad input stops. A lower dampingFactor glides
+  // longer (smoother), and a higher zoomSpeed makes wheel/pinch zoom
+  // noticeably faster on both desktop and mobile.
   controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.zoomSpeed = 0.6;
+  controls.dampingFactor = 0.06;
+  controls.zoomSpeed = 1.15;
   controls.rotateSpeed = 0.6;
 
   world.pointOfView({ lat: 20, lng: 0, altitude: 2.2 }, 0);
@@ -312,6 +313,67 @@
   window.addEventListener('resize', () => {
     world.width(window.innerWidth).height(window.innerHeight);
   });
+
+  // ---------------------------------------------------------------
+  // Progressive globe detail: when the user zooms in close, swap in a
+  // high-res Earth texture (8192x4096 equirectangular Blue Marble) by
+  // replacing the material's map directly -- globe.gl keeps its geometry,
+  // bump map and lighting, so nothing re-mounts or flashes. The hi-res
+  // texture is loaded lazily ONCE, cached in `hiResTex`, and never fetched
+  // again; the original texture is kept in `loResTex` for the zoom-out
+  // swap. Hysteresis (separate IN/OUT distances) plus "only apply once the
+  // texture has fully loaded" prevent flicker/jumping at the threshold.
+  // ---------------------------------------------------------------
+  const HIRES_URL = 'https://raw.githubusercontent.com/turban/webgl-earth/master/images/2_no_clouds_8k.jpg';
+  const HIRES_IN_DIST = 170;   // camera distance below this -> want hi-res
+  const HIRES_OUT_DIST = 210;  // camera distance above this -> back to lo-res
+  let hiResTex = null;          // cached high-res THREE.Texture
+  let hiResLoading = false;
+  let hiResApplied = false;
+  let loResTex = null;          // the default globe texture, captured once
+
+  function ensureHiRes() {
+    if (hiResTex || hiResLoading) return;
+    hiResLoading = true;
+    new THREE.TextureLoader().load(HIRES_URL, tex => {
+      tex.anisotropy = 4; // crisp texture at oblique viewing angles
+      hiResTex = tex;
+    });
+  }
+
+  function applyGlobeTex(tex) {
+    const mat = world.globeMaterial();
+    if (!mat || !mat.map) return false;
+    if (mat.map === tex) return true;
+    mat.map = tex;
+    mat.needsUpdate = true;
+    return true;
+  }
+
+  // Checked every frame (cheap: a couple of comparisons once settled), so it
+  // also catches texture swaps from view changes without needing camera
+  // events. Started via requestAnimationFrame (not invoked directly) so the
+  // first check happens after the rest of the script has initialized.
+  function watchZoom() {
+    if (activeView === 'satellite') {
+      const mat = world.globeMaterial();
+      // If the map changed underneath us (e.g. returning from a heatmap
+      // view re-set the satellite texture), re-sync the applied flag.
+      if (hiResApplied && mat && mat.map !== hiResTex) hiResApplied = false;
+      if (mat && mat.map && mat.map !== hiResTex) loResTex = mat.map;
+      if (loResTex) {
+        const d = world.camera().position.length();
+        if (d < HIRES_IN_DIST) {
+          ensureHiRes(); // start loading well before it's needed
+          if (hiResTex && !hiResApplied) hiResApplied = applyGlobeTex(hiResTex);
+        } else if (d > HIRES_OUT_DIST && hiResApplied) {
+          hiResApplied = !applyGlobeTex(loResTex);
+        }
+      }
+    }
+    requestAnimationFrame(watchZoom);
+  }
+  requestAnimationFrame(watchZoom);
 
   // ---------------------------------------------------------------
   // Satellite / heatmap views
