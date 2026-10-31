@@ -108,9 +108,7 @@
   const DATA = window.CLIMATE_DATA;
   if (!DATA) { console.error('data.js did not define window.CLIMATE_DATA'); return; }
 
-  // Higher-resolution NASA Blue Marble (5400x2700) instead of the low-res
-  // texture bundled with three-globe's examples.
-  const SATELLITE_URL = 'https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg';
+  const SATELLITE_URL = 'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg';
   const BUMP_URL = 'https://unpkg.com/three-globe/example/img/earth-topology.png';
 
   // ---------------------------------------------------------------
