@@ -51,7 +51,6 @@
   #panel.open{transform:translateX(0);}
   #panel.fullscreen{width:100vw;max-width:none;}
   #panel.fullscreen .chartBlock canvas{height:500px !important;}
-  #panel.fullscreen .returnGrid canvas{height:500px !important;}
   @media (max-width:720px){
     #panel{width:100vw;}
   }
@@ -71,8 +70,23 @@
   .chartBlock h3{font-size:13px;font-weight:600;margin:0 0 2px;color:var(--text);}
   .chartBlock p.sub{font-size:11px;color:var(--muted);margin:0 0 8px;}
   .chartBlock canvas{width:100% !important;height:340px !important;}
-  .returnGrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-  @media (max-width:520px){ .returnGrid{grid-template-columns:1fr;} }
+
+  /* ---- donut summary ---- */
+  .donutWrap{display:flex;flex-direction:column;align-items:center;margin-bottom:4px;}
+  .donutSvg{width:100%;max-width:280px;height:auto;display:block;}
+  .donutLabel{fill:var(--text);font-size:11px;font-weight:600;}
+  .donutValue{fill:var(--text);font-size:14px;font-weight:700;}
+  .donutPrec{fill:var(--muted);font-size:10px;}
+  .donutCenterLabel{fill:var(--muted);font-size:9px;letter-spacing:.04em;}
+  .donutCenterValue{fill:var(--text);font-size:19px;font-weight:700;}
+  .donutCenterPrec{fill:var(--muted);font-size:11px;}
+  .seasonCaption{font-size:11px;color:var(--muted);text-align:center;margin-top:2px;}
+  .precNote{font-size:11px;color:var(--muted);text-align:center;margin-top:6px;font-style:italic;}
+  #fullDataToggle{display:block;width:100%;text-align:center;margin:16px 0 4px;
+    background:rgba(95,180,255,0.08);border:1px solid var(--panel-border);color:var(--text);
+    padding:9px;border-radius:10px;font-size:12px;cursor:pointer;}
+  #fullDataToggle:hover{border-color:var(--accent);}
+  #fullDataSection.collapsed{display:none;}
 
   #emptyState{display:flex;height:100%;align-items:center;justify-content:center;
     color:var(--muted);font-size:13px;text-align:center;padding:40px;}
@@ -474,11 +488,15 @@
   let liveCharts = [];
   function destroyCharts() { liveCharts.forEach(c => c.destroy()); liveCharts = []; }
 
-  const PALETTE = ['#5fb4ff', '#9fd8ff', '#ff6b6b', '#ffb199']; // caseIndex -> color
-  const DASH = [[], [], [], []]; // could differentiate scenarios with dash patterns
-  function caseStyle(idx, scenarioIdx) {
-    return { color: PALETTE[idx], dash: scenarioIdx === 1 ? [6, 4] : [] };
-  }
+  // Persisted across openCity() calls (i.e. across closing/reopening the
+  // panel for the same or a different city), per the "see full data" toggle
+  // being sticky rather than resetting every time.
+  let fullDataOpen = false;
+
+  // Simple cyclic palette so this keeps working whether there are 2, 3 or
+  // more models -- nothing fancier than "pick the next color" is needed.
+  const MODEL_COLORS = ['#5fb4ff', '#ff6b6b', '#8bd17c', '#ffb199', '#c792ea'];
+  function modelColor(i) { return MODEL_COLORS[i % MODEL_COLORS.length]; }
 
   function baseChartOptions(extra) {
     return Object.assign({
@@ -497,51 +515,114 @@
     }, extra || {});
   }
 
-  function renderClimatology(canvas, cd) {
-    const cases = Object.keys(cd.climatology);
-    const datasets = [];
-    cases.forEach((caseName, i) => {
-      const { tas, tasmin, tasmax } = cd.climatology[caseName];
-      const style = caseStyle(i, caseName.includes('Scenario 2') ? 1 : 0);
-      datasets.push({
-        label: caseName + ' (min)', data: tasmin, borderWidth: 0, pointRadius: 0,
-        fill: false, hidden: false, borderColor: 'transparent', backgroundColor: 'transparent',
-        order: 3,
-      });
-      datasets.push({
-        label: caseName + ' (min-max range)', data: tasmax, borderWidth: 0, pointRadius: 0,
-        fill: '-1', backgroundColor: style.color + '33', order: 2,
-      });
-      datasets.push({
-        label: caseName, data: tas, borderColor: style.color, backgroundColor: style.color,
-        borderDash: style.dash, borderWidth: 2, pointRadius: 0, fill: false, tension: 0.25, order: 1,
+  // ---------------------------------------------------------------
+  // Seasonal / annual anomaly summary, averaged across whatever models
+  // are present (2 today, 3 later -- nothing here assumes a count).
+  // ---------------------------------------------------------------
+  const SEASONS = [
+    { key: 'DJF', label: 'Winter', range: 'Dec\u2013Feb', months: [11, 0, 1] },
+    { key: 'MAM', label: 'Spring', range: 'Mar\u2013May', months: [2, 3, 4] },
+    { key: 'JJA', label: 'Summer', range: 'Jun\u2013Aug', months: [5, 6, 7] },
+    { key: 'SON', label: 'Autumn', range: 'Sep\u2013Nov', months: [8, 9, 10] },
+  ];
+  const ALL_MONTHS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+  function avg(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
+
+  // tas: plain mean-of-means (fine, since the mean is linear).
+  // prec: ratio of averages -- mean absolute anomaly over mean absolute
+  // Intact value -- rather than averaging each month/model's own percentage.
+  // Averaging percentages directly would let a month with a tiny Intact
+  // baseline (near-zero rainfall) swing wildly and skew the result.
+  function periodStats(cd, monthIdxs) {
+    const models = cd.models || [];
+    const tasVals = [], precAnomVals = [], precIntactVals = [];
+    models.forEach(model => {
+      const anomaly = cd.anomaly && cd.anomaly[model];
+      const intact = cd.climatology && cd.climatology[`${model}|${cd.scenarios[0]}`];
+      monthIdxs.forEach(mi => {
+        if (anomaly && anomaly.tas) tasVals.push(anomaly.tas[mi]);
+        if (anomaly && anomaly.prec) precAnomVals.push(anomaly.prec[mi]);
+        if (intact && intact.prec) precIntactVals.push(intact.prec[mi]);
       });
     });
-    const chart = new Chart(canvas, {
-      type: 'line',
-      data: { labels: cd.months, datasets },
-      options: baseChartOptions({
-        plugins: {
-          legend: {
-            labels: {
-              color: '#c7d2e6', boxWidth: 12, font: { size: 10 },
-              filter: item => !item.text.includes('(min)') && !item.text.includes('(min-max')
-            }
-          }
-        },
-        scales: { y: { title: { display: true, text: 'Temperature (°C)', color: '#8fa0bd', font: { size: 10 } },
-          ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
-          x: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } } }
-      }),
-    });
-    liveCharts.push(chart);
+    const tas = tasVals.length ? avg(tasVals) : null;
+    let precPct = null;
+    if (precAnomVals.length && precIntactVals.length) {
+      const meanIntact = avg(precIntactVals);
+      precPct = meanIntact ? (avg(precAnomVals) / meanIntact) * 100 : null;
+    }
+    return { tas, precPct };
   }
 
-  function renderAnomaly(canvas, cd, model) {
-    const a = cd.anomaly[model];
-    const varColors = { tasmin: '#5fb4ff', tas: '#8bd17c', tasmax: '#ff6b6b' };
-    const datasets = ['tasmin', 'tas', 'tasmax'].map(v => ({
-      label: v, data: a[v], borderColor: varColors[v], backgroundColor: varColors[v],
+  function computeSummary(cd) {
+    const seasons = SEASONS.map(s => Object.assign({}, s, periodStats(cd, s.months)));
+    const annual = periodStats(cd, ALL_MONTHS);
+    return { seasons, annual };
+  }
+
+  function fmtTas(v) {
+    if (v == null || !Number.isFinite(v)) return '\u2013';
+    return (v > 0 ? '+' : '') + v.toFixed(1) + '\u00b0C';
+  }
+  function fmtPrec(v) {
+    if (v == null || !Number.isFinite(v)) return null;
+    return Math.abs(v).toFixed(0) + '% ' + (v >= 0 ? 'wetter' : 'drier');
+  }
+
+  // ---------------------------------------------------------------
+  // Donut summary widget (SVG): 4 season quadrants + an annual center.
+  // ---------------------------------------------------------------
+  function polarPoint(cx, cy, r, angleDeg) {
+    const a = (angleDeg - 90) * Math.PI / 180;
+    return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
+  }
+  function annularSectorPath(cx, cy, rOuter, rInner, startAngle, endAngle) {
+    const so = polarPoint(cx, cy, rOuter, endAngle);
+    const eo = polarPoint(cx, cy, rOuter, startAngle);
+    const si = polarPoint(cx, cy, rInner, endAngle);
+    const ei = polarPoint(cx, cy, rInner, startAngle);
+    const large = (endAngle - startAngle) > 180 ? 1 : 0;
+    return `M ${so.x} ${so.y} A ${rOuter} ${rOuter} 0 ${large} 0 ${eo.x} ${eo.y} `
+         + `L ${ei.x} ${ei.y} A ${rInner} ${rInner} 0 ${large} 1 ${si.x} ${si.y} Z`;
+  }
+  function segmentColor(tas) {
+    if (tas == null) return 'rgba(143,160,189,0.25)';
+    const clip = 2; // same clip scale as the globe heatmaps, for consistency
+    const t = Math.max(-1, Math.min(1, tas / clip));
+    const opacity = (0.35 + 0.55 * Math.abs(t)).toFixed(2);
+    return t < 0 ? `rgba(95,180,255,${opacity})` : `rgba(255,107,107,${opacity})`;
+  }
+
+  function buildDonutSVG(summary, hasPrec) {
+    const cx = 130, cy = 130, rOuter = 88, rInner = 54, labelR = 122;
+    const parts = [];
+    summary.seasons.forEach((s, i) => {
+      const start = i * 90, end = start + 90;
+      parts.push(`<path d="${annularSectorPath(cx, cy, rOuter, rInner, start, end)}" fill="${segmentColor(s.tas)}" stroke="#04070d" stroke-width="2"/>`);
+      const mid = start + 45;
+      const p = polarPoint(cx, cy, labelR, mid);
+      const icon = s.tas == null ? '' : (s.tas < 0 ? '\u2744' : '\u2600');
+      const precText = hasPrec ? fmtPrec(s.precPct) : null;
+      parts.push(`<text x="${p.x}" y="${p.y - 6}" text-anchor="middle" class="donutLabel">${icon} ${s.label}</text>`);
+      parts.push(`<text x="${p.x}" y="${p.y + 10}" text-anchor="middle" class="donutValue">${fmtTas(s.tas)}</text>`);
+      if (precText) parts.push(`<text x="${p.x}" y="${p.y + 24}" text-anchor="middle" class="donutPrec">${precText}</text>`);
+    });
+    const annualPrec = hasPrec ? fmtPrec(summary.annual.precPct) : null;
+    parts.push(`<text x="${cx}" y="${cy - 10}" text-anchor="middle" class="donutCenterLabel">ANNUAL AVG</text>`);
+    parts.push(`<text x="${cx}" y="${cy + 12}" text-anchor="middle" class="donutCenterValue">${fmtTas(summary.annual.tas)}</text>`);
+    if (annualPrec) parts.push(`<text x="${cx}" y="${cy + 30}" text-anchor="middle" class="donutCenterPrec">${annualPrec}</text>`);
+    return `<svg viewBox="0 0 260 260" class="donutSvg">${parts.join('')}</svg>`;
+  }
+
+  // ---------------------------------------------------------------
+  // Full-data charts
+  // ---------------------------------------------------------------
+  function renderAnomalyAll(canvas, cd) {
+    const models = cd.models || [];
+    const datasets = models.map((model, i) => ({
+      label: model, data: (cd.anomaly && cd.anomaly[model] && cd.anomaly[model].tas) || [],
+      borderColor: modelColor(i), backgroundColor: modelColor(i),
       borderWidth: 2, pointRadius: 2, tension: 0.25,
     }));
     const chart = new Chart(canvas, {
@@ -549,7 +630,7 @@
       data: { labels: cd.months, datasets },
       options: baseChartOptions({
         scales: {
-          y: { title: { display: true, text: 'Δ (°C), Scen2 − Scen1', color: '#8fa0bd', font: { size: 10 } },
+          y: { title: { display: true, text: 'Δ tas (°C), Collapsed − Intact', color: '#8fa0bd', font: { size: 10 } },
             ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.08)' } },
           x: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
         }
@@ -558,29 +639,54 @@
     liveCharts.push(chart);
   }
 
-  function renderReturnPanel(canvas, cd, panelName) {
-    const p = cd.returnPeriods.panels[panelName];
-    const T = cd.returnPeriods.T;
-    const cases = Object.keys(p.curves);
-    const datasets = cases.map((caseName, i) => {
-      const style = caseStyle(i, caseName.includes('Scenario 2') ? 1 : 0);
-      return {
-        label: caseName,
-        data: T.map((t, k) => ({ x: t, y: p.curves[caseName][k] })),
-        borderColor: style.color, backgroundColor: style.color, borderDash: style.dash,
-        borderWidth: 2, pointRadius: 3, tension: 0,
-      };
+  // Temperature as two lines (Intact vs Collapsed) on the left axis;
+  // precipitation as bars on the right axis -- a solid bar for Intact, and
+  // a translucent floating bar from the Intact value to the Collapsed value
+  // (green = wetter, red = drier) so only the *difference* reads as a shape.
+  function renderModelClimatology(canvas, cd, model) {
+    const scenarios = cd.scenarios || [];
+    const intact = cd.climatology && cd.climatology[`${model}|${scenarios[0]}`];
+    const collapsed = cd.climatology && cd.climatology[`${model}|${scenarios[1]}`];
+    const datasets = [];
+
+    if (intact && intact.tas) datasets.push({
+      type: 'line', label: `${scenarios[0]} (tas)`, data: intact.tas,
+      borderColor: '#5fb4ff', backgroundColor: '#5fb4ff', borderWidth: 2,
+      pointRadius: 0, tension: 0.25, yAxisID: 'y', order: 3,
     });
+    if (collapsed && collapsed.tas) datasets.push({
+      type: 'line', label: `${scenarios[1]} (tas)`, data: collapsed.tas,
+      borderColor: '#ff6b6b', backgroundColor: '#ff6b6b', borderWidth: 2,
+      borderDash: [6, 4], pointRadius: 0, tension: 0.25, yAxisID: 'y', order: 4,
+    });
+
+    const hasPrec = !!(intact && intact.prec && collapsed && collapsed.prec);
+    if (hasPrec) {
+      datasets.push({
+        type: 'bar', label: `${scenarios[0]} precip`, data: intact.prec,
+        backgroundColor: 'rgba(95,180,255,0.35)', borderWidth: 0,
+        yAxisID: 'y1', order: 1, grouped: false, barPercentage: 0.6, categoryPercentage: 0.8,
+      });
+      datasets.push({
+        type: 'bar', label: `${scenarios[1]} precip (Δ)`, yAxisID: 'y1', order: 2,
+        data: intact.prec.map((v0, i) => [v0, collapsed.prec[i]]),
+        backgroundColor: intact.prec.map((v0, i) => collapsed.prec[i] >= v0 ? 'rgba(139,209,124,0.5)' : 'rgba(255,107,107,0.5)'),
+        borderWidth: 0, grouped: false, barPercentage: 0.6, categoryPercentage: 0.8,
+      });
+    }
+
     const chart = new Chart(canvas, {
-      type: 'line',
-      data: { datasets },
+      type: 'bar',
+      data: { labels: cd.months, datasets },
       options: baseChartOptions({
-        plugins: { legend: { display: false }, tooltip: { callbacks: { title: c => `T = ${c[0].parsed.x} yr` } } },
         scales: {
-          x: { type: 'logarithmic', min: 2, max: 100,
-            ticks: { color: '#8fa0bd', font: { size: 9 }, callback: v => T.includes(v) ? v : '' },
-            grid: { color: 'rgba(255,255,255,0.06)' } },
-          y: { ticks: { color: '#8fa0bd', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          x: { ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          y: { position: 'left',
+            title: { display: true, text: 'Temperature (°C)', color: '#8fa0bd', font: { size: 10 } },
+            ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.06)' } },
+          y1: { position: 'right', display: hasPrec,
+            title: { display: true, text: 'Precip (mm/day)', color: '#8fa0bd', font: { size: 10 } },
+            ticks: { color: '#8fa0bd', font: { size: 10 } }, grid: { drawOnChartArea: false } },
         }
       }),
     });
@@ -600,39 +706,52 @@
       return;
     }
 
+    const models = cd.models || [];
+    const summary = computeSummary(cd);
+    const hasPrec = models.some(m => cd.anomaly && cd.anomaly[m] && cd.anomaly[m].prec
+      && cd.climatology && cd.climatology[`${m}|${cd.scenarios[0]}`] && cd.climatology[`${m}|${cd.scenarios[0]}`].prec);
+    const captionText = SEASONS.map(s => `${s.label} (${s.range})`).join(' \u00b7 ');
+
     panelBody.innerHTML = `
-      <div class="chartBlock">
-        <h3>Monthly climatology</h3>
-        <p class="sub">Mean temperature, shaded min&ndash;max range, all model/scenario cases</p>
-        <canvas id="c-clim"></canvas>
+      <div class="donutWrap">
+        ${buildDonutSVG(summary, hasPrec)}
+        <div class="seasonCaption">${captionText}</div>
+        ${hasPrec ? '' : '<div class="precNote">Precipitation data not available yet</div>'}
       </div>
-      <div class="chartBlock">
-        <h3>Anomaly &mdash; ${cd.models[0]}</h3>
-        <p class="sub">Scenario 2 minus Scenario 1, by month</p>
-        <canvas id="c-anom-0"></canvas>
-      </div>
-      <div class="chartBlock">
-        <h3>Anomaly &mdash; ${cd.models[1]}</h3>
-        <p class="sub">Scenario 2 minus Scenario 1, by month</p>
-        <canvas id="c-anom-1"></canvas>
-      </div>
-      <div class="chartBlock">
-        <h3>Return periods</h3>
-        <p class="sub">Gumbel-fit extremes across all cases</p>
-        <div class="returnGrid" id="returnGrid"></div>
+      <button id="fullDataToggle" class="viewBtn" type="button">${fullDataOpen ? 'Hide full data \u25b4' : 'Show full data \u25be'}</button>
+      <div id="fullDataSection" class="${fullDataOpen ? '' : 'collapsed'}">
+        <div class="chartBlock">
+          <h3>Monthly tas anomaly &mdash; all models</h3>
+          <p class="sub">Collapsed minus Intact, by month</p>
+          <canvas id="c-anom-all"></canvas>
+        </div>
+        ${models.map((model, i) => `
+          <div class="chartBlock">
+            <h3>Climatology &mdash; ${model}</h3>
+            <p class="sub">Temperature (line, left axis) and precipitation (bars, right axis), Intact vs Collapsed</p>
+            <canvas id="c-clim-${i}"></canvas>
+          </div>
+        `).join('')}
       </div>
     `;
 
-    renderClimatology(document.getElementById('c-clim'), cd);
-    renderAnomaly(document.getElementById('c-anom-0'), cd, cd.models[0]);
-    renderAnomaly(document.getElementById('c-anom-1'), cd, cd.models[1]);
+    renderAnomalyAll(document.getElementById('c-anom-all'), cd);
+    models.forEach((model, i) => {
+      renderModelClimatology(document.getElementById(`c-clim-${i}`), cd, model);
+    });
 
-    const grid = document.getElementById('returnGrid');
-    Object.keys(cd.returnPeriods.panels).forEach((panelName, i) => {
-      const wrap = document.createElement('div');
-      wrap.innerHTML = `<p class="sub" style="margin-bottom:4px;">${panelName}</p><canvas id="c-rp-${i}"></canvas>`;
-      grid.appendChild(wrap);
-      renderReturnPanel(wrap.querySelector('canvas'), cd, panelName);
+    const toggleBtn = document.getElementById('fullDataToggle');
+    const section = document.getElementById('fullDataSection');
+    toggleBtn.addEventListener('click', () => {
+      fullDataOpen = !fullDataOpen;
+      section.classList.toggle('collapsed', !fullDataOpen);
+      toggleBtn.textContent = fullDataOpen ? 'Hide full data \u25b4' : 'Show full data \u25be';
+      if (fullDataOpen) {
+        // Charts built while the section was display:none have a 0-size
+        // canvas; resize once it's actually visible (same trick used for
+        // the fullscreen toggle above).
+        requestAnimationFrame(() => liveCharts.forEach(c => c.resize()));
+      }
     });
 
     panel.classList.add('open');
